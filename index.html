@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Embodied AI Agent Simulation</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Canvas Grid World -->
+        <div class="main-content">
+            <div class="canvas-wrapper">
+                <canvas id="gridCanvas" width="900" height="600"></canvas>
+                <div class="canvas-overlay">
+                    <span class="fps-counter">FPS: <span id="fpsValue">60</span></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Control Sidebar -->
+        <aside class="control-panel">
+            <div class="panel-header">
+                <h1>AI Agent Control</h1>
+                <div class="status-indicator" id="statusIndicator"></div>
+            </div>
+
+            <!-- API Configuration -->
+            <section class="panel-section">
+                <h3>API Configuration</h3>
+                <div class="input-group">
+                    <label for="apiKey">API Key (Gemini/OpenAI)</label>
+                    <input 
+                        type="password" 
+                        id="apiKey" 
+                        placeholder="Enter your API key..."
+                        class="input-field"
+                    >
+                    <small class="hint">Keys are stored locally in browser only</small>
+                </div>
+                <div class="input-group">
+                    <label for="apiProvider">Provider</label>
+                    <select id="apiProvider" class="input-field">
+                        <option value="gemini">Google Gemini</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="local">Local AI (Heuristic)</option>
+                    </select>
+                </div>
+            </section>
+
+            <!-- Goal Configuration -->
+            <section class="panel-section">
+                <h3>Mission Goal</h3>
+                <div class="goal-display" id="goalDisplay">
+                    Goal: Navigate to the Energy Core
+                </div>
+                <div class="input-group">
+                    <label for="targetTile">Select Target</label>
+                    <select id="targetTile" class="input-field">
+                        <option value="energy">Energy Core (2)</option>
+                        <option value="terminal">Control Terminal (3)</option>
+                    </select>
+                </div>
+            </section>
+
+            <!-- Action Log Terminal -->
+            <section class="panel-section">
+                <h3>Agent Reasoning Log</h3>
+                <div class="log-terminal" id="logTerminal">
+                    <div class="log-entry system">
+                        [SYSTEM] Agent simulation initialized. Ready for deployment.
+                    </div>
+                </div>
+            </section>
+
+            <!-- Control Buttons -->
+            <section class="panel-section button-group">
+                <button id="runStepBtn" class="btn btn-primary">
+                    <span class="btn-icon">▶</span> Run Step
+                </button>
+                <button id="autoRunBtn" class="btn btn-secondary">
+                    <span class="btn-icon">⏯</span> Auto Run
+                </button>
+                <button id="resetBtn" class="btn btn-danger">
+                    <span class="btn-icon">↻</span> Reset
+                </button>
+            </section>
+
+            <!-- Statistics -->
+            <section class="panel-section">
+                <h3>Simulation Stats</h3>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-label">Steps:</span>
+                        <span class="stat-value" id="stepCounter">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Position:</span>
+                        <span class="stat-value" id="positionDisplay">1, 1</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Status:</span>
+                        <span class="stat-value" id="statusDisplay">Idle</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Distance:</span>
+                        <span class="stat-value" id="distanceDisplay">—</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Footer Info -->
+            <section class="panel-footer">
+                <p>🤖 Embodied AI Agent Simulation</p>
+                <p class="footer-hint">Press <strong>Run Step</strong> or enable <strong>Auto Run</strong></p>
+            </section>
+        </aside>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
