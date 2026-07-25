@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Embodied AI Agent Simulation</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Canvas Section -->
+        <div class="canvas-section">
+            <h1>Agent Grid World</h1>
+            <canvas id="gameCanvas" width="900" height="600"></canvas>
+            <div class="canvas-info">
+                <span id="agentPos">Agent: (0, 0)</span>
+                <span id="fps">FPS: 60</span>
+            </div>
+        </div>
+
+        <!-- Control Panel Sidebar -->
+        <div class="control-panel">
+            <h2>Control Panel</h2>
+
+            <!-- API Configuration -->
+            <div class="panel-section">
+                <h3>API Configuration</h3>
+                <label for="apiKey">API Key:</label>
+                <input 
+                    type="password" 
+                    id="apiKey" 
+                    placeholder="Enter Gemini or OpenAI API key"
+                    class="input-field"
+                >
+                <div class="checkbox-group">
+                    <label>
+                        <input type="radio" name="apiProvider" value="gemini" checked>
+                        Google Gemini
+                    </label>
+                    <label>
+                        <input type="radio" name="apiProvider" value="openai">
+                        OpenAI
+                    </label>
+                </div>
+                <button id="saveApiBtn" class="btn btn-secondary">Save API Key</button>
+            </div>
+
+            <!-- Goal Configuration -->
+            <div class="panel-section">
+                <h3>Mission</h3>
+                <div id="goalDisplay" class="goal-display">
+                    Goal: Navigate to the Energy Core
+                </div>
+                <label for="goalSelect">Select Target:</label>
+                <select id="goalSelect" class="input-field">
+                    <option value="energy">Energy Core (2, 8)</option>
+                    <option value="terminal">Control Terminal (12, 2)</option>
+                </select>
+            </div>
+
+            <!-- Action Log Terminal -->
+            <div class="panel-section">
+                <h3>Agent Thought Log</h3>
+                <div id="actionLog" class="action-log">
+                    <div class="log-entry system">System: Ready. Awaiting first command...</div>
+                </div>
+            </div>
+
+            <!-- Control Buttons -->
+            <div class="panel-section">
+                <h3>Actions</h3>
+                <button id="runStepBtn" class="btn btn-primary">Run Step</button>
+                <button id="runContinuousBtn" class="btn btn-primary">Run Continuous</button>
+                <button id="stopBtn" class="btn btn-danger" disabled>Stop</button>
+                <button id="resetBtn" class="btn btn-secondary">Reset World</button>
+            </div>
+
+            <!-- Status Indicator -->
+            <div class="panel-section">
+                <div id="statusIndicator" class="status-indicator idle">
+                    <span class="status-dot"></span>
+                    <span id="statusText">Idle</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
