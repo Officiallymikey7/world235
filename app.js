@@ -27,7 +27,9 @@ class EmbodiedAISimulation {
             targetY: null,
             moving: false,
             moveProgress: 0,
-            moveDuration: 300 // ms per tile
+            moveDuration: 300, // ms per tile
+            failedAttempts: 0,
+            lastFailedPos: null
         };
 
         // Simulation State
@@ -86,12 +88,57 @@ class EmbodiedAISimulation {
         return map;
     }
 
+    /* ==================== UTILITY FUNCTIONS ==================== */
+    isWalkable(x, y) {
+        if (x < 0 || x >= this.gridWidth || y < 0 || y >= this.gridHeight) {
+            return false;
+        }
+        return this.mapData[y][x] !== 1;
+    }
+
+    getWalkableNeighbors(x, y) {
+        const neighbors = [];
+        const directions = [
+            { dx: 0, dy: -1 }, { dx: 1, dy: 0 },
+            { dx: 0, dy: 1 }, { dx: -1, dy: 0 }
+        ];
+
+        for (const dir of directions) {
+            const nx = x + dir.dx;
+            const ny = y + dir.dy;
+            if (this.isWalkable(nx, ny)) {
+                neighbors.push({ x: nx, y: ny });
+            }
+        }
+        return neighbors;
+    }
+
     /* ==================== PATHFINDING: A* ALGORITHM ==================== */
     heuristic(x1, y1, x2, y2) {
         return Math.abs(x2 - x1) + Math.abs(y2 - y1);
     }
 
     findPath(startX, startY, endX, endY) {
+        // Ensure end position is walkable, otherwise find nearest walkable position
+        if (!this.isWalkable(endX, endY)) {
+            const neighbors = this.getWalkableNeighbors(endX, endY);
+            if (neighbors.length === 0) {
+                return []; // No path possible
+            }
+            // Find closest neighbor to end position
+            let closest = neighbors[0];
+            let minDist = this.heuristic(closest.x, closest.y, endX, endY);
+            for (const n of neighbors) {
+                const dist = this.heuristic(n.x, n.y, endX, endY);
+                if (dist < minDist) {
+                    minDist = dist;
+                    closest = n;
+                }
+            }
+            endX = closest.x;
+            endY = closest.y;
+        }
+
         const openSet = [];
         const cameFrom = new Map();
         const gScore = new Map();
@@ -110,7 +157,11 @@ class EmbodiedAISimulation {
             { dx: 0, dy: 1 }, { dx: -1, dy: 0 }
         ];
 
-        while (openSet.length > 0) {
+        let iterations = 0;
+        const maxIterations = 500;
+
+        while (openSet.length > 0 && iterations < maxIterations) {
+            iterations++;
             let current = openSet[0];
             let currentIdx = 0;
             for (let i = 1; i < openSet.length; i++) {
@@ -139,9 +190,7 @@ class EmbodiedAISimulation {
                 const nx = current.x + neighbor.dx;
                 const ny = current.y + neighbor.dy;
 
-                if (nx < 0 || nx >= this.gridWidth || 
-                    ny < 0 || ny >= this.gridHeight ||
-                    this.mapData[ny][nx] === 1) {
+                if (!this.isWalkable(nx, ny)) {
                     continue;
                 }
 
@@ -247,7 +296,7 @@ Current perception state:
 - Nearby tiles (type: 0=floor, 1=wall, 2=energy, 3=terminal):
 ${perceptionState.nearbyTiles.map(t => `  (${t.x},${t.y}): type=${t.type}`).join('\n')}
 
-Your task: Navigate to the ${targetName}.
+Your task: Navigate to the ${targetName}. ALWAYS avoid walls (type=1).
 
 Respond in JSON format ONLY, no extra text:
 {"thought": "brief reasoning about next move", "target_x": <number>, "target_y": <number>}`;
@@ -303,10 +352,13 @@ Respond in JSON format ONLY, no extra text:
         try {
             const jsonMatch = responseText.match(/\{[\s\S]*\}/);
             const json = JSON.parse(jsonMatch?.[0] || responseText);
+            const targetX = Math.max(0, Math.min(this.gridWidth - 1, parseInt(json.target_x) || 0));
+            const targetY = Math.max(0, Math.min(this.gridHeight - 1, parseInt(json.target_y) || 0));
+            
             return {
                 thought: json.thought || 'Moving to target',
-                target_x: Math.max(0, Math.min(this.gridWidth - 1, parseInt(json.target_x) || 0)),
-                target_y: Math.max(0, Math.min(this.gridHeight - 1, parseInt(json.target_y) || 0))
+                target_x: targetX,
+                target_y: targetY
             };
         } catch (e) {
             return this.getHeuristicAction(this.getPerceptionState());
@@ -325,14 +377,44 @@ Respond in JSON format ONLY, no extra text:
             };
         }
 
-        const dx = Math.sign(target.x - perceptionState.agentPosition.x);
-        const dy = Math.sign(target.y - perceptionState.agentPosition.y);
+        // Instead of naive step-by-step, use full pathfinding
+        const path = this.findPath(
+            perceptionState.agentPosition.x,
+            perceptionState.agentPosition.y,
+            target.x,
+            target.y
+        );
 
-        return {
-            thought: `Moving towards ${this.targetType === 'energy' ? 'Energy Core' : 'Terminal'} at (${target.x}, ${target.y})`,
-            target_x: perceptionState.agentPosition.x + dx,
-            target_y: perceptionState.agentPosition.y + dy
-        };
+        if (path.length > 0) {
+            // Follow the path
+            const nextStep = path[0];
+            return {
+                thought: `Following path towards ${this.targetType === 'energy' ? 'Energy Core' : 'Terminal'} at (${target.x}, ${target.y})`,
+                target_x: nextStep.x,
+                target_y: nextStep.y
+            };
+        } else {
+            // If no path found, pick a random walkable neighbor
+            const neighbors = this.getWalkableNeighbors(
+                perceptionState.agentPosition.x,
+                perceptionState.agentPosition.y
+            );
+
+            if (neighbors.length > 0) {
+                const randomNeighbor = neighbors[Math.floor(Math.random() * neighbors.length)];
+                return {
+                    thought: 'No direct path found, exploring nearby area...',
+                    target_x: randomNeighbor.x,
+                    target_y: randomNeighbor.y
+                };
+            } else {
+                return {
+                    thought: 'Stuck, unable to move',
+                    target_x: perceptionState.agentPosition.x,
+                    target_y: perceptionState.agentPosition.y
+                };
+            }
+        }
     }
 
     /* ==================== AGENT MOVEMENT ==================== */
@@ -343,8 +425,39 @@ Respond in JSON format ONLY, no extra text:
         this.addLogEntry('thought', `💭 ${decision.thought}`);
 
         // Check if target is walkable
-        if (this.mapData[targetY]?.[targetX] === 1) {
-            this.addLogEntry('action', `⚠️  Wall detected at (${targetX}, ${targetY}), recalculating...`);
+        if (!this.isWalkable(targetX, targetY)) {
+            this.addLogEntry('action', `⚠️  Wall at (${targetX}, ${targetY}), finding alternate path...`);
+            
+            // Try to find nearest walkable alternative
+            const neighbors = this.getWalkableNeighbors(targetX, targetY);
+            if (neighbors.length > 0) {
+                // Pick the neighbor closest to original target
+                let best = neighbors[0];
+                let minDist = this.heuristic(best.x, best.y, targetX, targetY);
+                
+                for (const neighbor of neighbors) {
+                    const dist = this.heuristic(neighbor.x, neighbor.y, targetX, targetY);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        best = neighbor;
+                    }
+                }
+                
+                const path = this.findPath(this.agent.x, this.agent.y, best.x, best.y);
+                if (path.length > 0) {
+                    this.agent.pathfindingPath = path;
+                    this.agent.targetX = path[0].x;
+                    this.agent.targetY = path[0].y;
+                    this.agent.moving = true;
+                    this.agent.moveProgress = 0;
+                    this.setStatus('moving');
+                    this.addLogEntry('action', `🚀 Rerouting to (${best.x}, ${best.y})...`);
+                    return true;
+                }
+            }
+            
+            this.addLogEntry('error', `❌ Cannot reach (${targetX}, ${targetY}), no walkable path`);
+            this.agent.failedAttempts++;
             return false;
         }
 
@@ -357,11 +470,13 @@ Respond in JSON format ONLY, no extra text:
             this.agent.targetY = path[0].y;
             this.agent.moving = true;
             this.agent.moveProgress = 0;
+            this.agent.failedAttempts = 0;
             this.setStatus('moving');
             this.addLogEntry('action', `🚀 Navigating to (${targetX}, ${targetY})...`);
             return true;
         } else {
             this.addLogEntry('error', `❌ No path found to (${targetX}, ${targetY})`);
+            this.agent.failedAttempts++;
             return false;
         }
     }
@@ -690,7 +805,9 @@ Respond in JSON format ONLY, no extra text:
             targetY: null,
             moving: false,
             moveProgress: 0,
-            moveDuration: 300
+            moveDuration: 300,
+            failedAttempts: 0,
+            lastFailedPos: null
         };
         this.stepCount = 0;
         this.isAutoRunning = false;
