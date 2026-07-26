@@ -91,7 +91,7 @@ The agent operates through a structured AI loop:
 
 ### 🎛️ Control Panel UI
 - **API Configuration Section**
-  - Masked API key input (saved to localStorage)
+  - Masked API key input (kept in memory for current session)
   - Provider selector: Gemini, OpenAI, or Local AI
   - Real-time validation and error handling
 
@@ -277,7 +277,7 @@ agent = {
 **In the Simulation:**
 1. Select **"Google Gemini"** from Provider dropdown
 2. Paste API key into the masked input field
-3. Press Enter or click elsewhere to save (stores in localStorage)
+3. Press Enter or click elsewhere to apply for the current session
 4. Click **"Run Step"** to test
 
 **API Endpoint:**
@@ -477,10 +477,9 @@ generationConfig: {
 await new Promise(resolve => setTimeout(resolve, 500)); // milliseconds between steps
 ```
 
-### localStorage Keys
+### Browser Storage Keys
 
 ```javascript
-'aiSimAPIKey'      // Stores masked API key
 'aiSimProvider'    // Stores provider selection (gemini, openai, local)
 ```
 
@@ -530,8 +529,8 @@ await new Promise(resolve => setTimeout(resolve, 500)); // milliseconds between 
 **Problem:** API key resets on page refresh
 
 **Solution:**
-- Check browser privacy settings allow localStorage
-- Clear browser cache and try again
+- This is expected behavior for in-memory key handling
+- Re-enter your key after refresh
 - Verify key format (should be alphanumeric string)
 
 ### Agent Not Moving
@@ -679,7 +678,7 @@ world235/
 - No cookies or analytics
 
 ✅ **API Key Security**
-- Stored only in browser localStorage
+- Stored in memory for the active session (not persisted on refresh)
 - Never transmitted to us or GitHub
 - Only sent directly to Gemini/OpenAI
 - User has full control

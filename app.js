@@ -22,6 +22,7 @@ class GPURenderer {
         this.goalSprite = null;
         this.enemySprites = [];
         this.coinSprites = [];
+        this.movingPlatformSprites = [];
 
         this.activeChunkKeys = new Set();
 
@@ -287,6 +288,13 @@ class GPURenderer {
             this.dynamicContainer.addChild(sprite);
         }
 
+        const movingPlatforms = this.game.platforms.filter(p => p.type === 'moving');
+        while (this.movingPlatformSprites.length < movingPlatforms.length) {
+            const sprite = new PIXI.Sprite(this.animatedTerrainFrames[0]);
+            this.movingPlatformSprites.push(sprite);
+            this.dynamicContainer.addChild(sprite);
+        }
+
         for (let i = 0; i < this.enemySprites.length; i++) {
             const sprite = this.enemySprites[i];
             const enemy = enemies[i];
@@ -310,6 +318,21 @@ class GPURenderer {
             sprite.visible = !coin.collected;
             sprite.x = coin.x;
             sprite.y = coin.y;
+        }
+
+        for (let i = 0; i < this.movingPlatformSprites.length; i++) {
+            const sprite = this.movingPlatformSprites[i];
+            const platform = movingPlatforms[i];
+            if (!platform) {
+                sprite.visible = false;
+                continue;
+            }
+            sprite.visible = true;
+            sprite.texture = this.animatedTerrainFrames[this.game.animationState.frameIndex];
+            sprite.x = platform.x;
+            sprite.y = platform.y;
+            sprite.width = platform.width;
+            sprite.height = platform.height;
         }
     }
 
@@ -405,7 +428,7 @@ class GPURenderer {
         this.updateLighting();
 
         const dynamicCount = 2 + this.game.enemies.filter(e => !e.defeated).length + this.game.coins.filter(c => !c.collected).length;
-        this.metrics.drawCalls = 2 + dynamicCount + 1;
+        this.metrics.drawCalls = 2 + dynamicCount + this.game.platforms.filter(p => p.type === 'moving').length + 1;
 
         this.app.render();
     }
@@ -690,8 +713,10 @@ class PlatformerGame {
 
         const tiles = [];
         for (const platform of this.platforms) {
+            if (platform.type === 'moving') {
+                continue;
+            }
             const tileType = platform.type === 'ground' ? 'ground' : platform.type === 'pole' ? 'pole' : 'platform';
-            const isMoving = platform.type === 'moving';
             const xStart = Math.floor(platform.x / this.tileSize);
             const yStart = Math.floor(platform.y / this.tileSize);
             const widthTiles = Math.max(1, Math.floor(platform.width / this.tileSize));
@@ -708,7 +733,7 @@ class PlatformerGame {
                         type: tileType,
                         collision: true,
                         lightBlock: platform.type !== 'pole',
-                        animated: isMoving
+                        animated: false
                     });
                 }
             }
@@ -845,7 +870,12 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
         });
         if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
         const data = await response.json();
-        return data.candidates?.[0]?.content?.parts?.[0]?.text || '{"thought":"fallback","action":"stand"}';
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) {
+            this.addLogEntry('system', '[SYSTEM] Gemini response missing expected content; using fallback action.');
+            return '{"thought":"fallback","action":"stand"}';
+        }
+        return text;
     }
 
     async callOpenAIAPI(prompt) {
@@ -866,7 +896,12 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
         });
         if (!response.ok) throw new Error(`OpenAI API error: ${response.status}`);
         const data = await response.json();
-        return data.choices?.[0]?.message?.content || '{"thought":"fallback","action":"stand"}';
+        const content = data.choices?.[0]?.message?.content;
+        if (!content) {
+            this.addLogEntry('system', '[SYSTEM] OpenAI response missing expected content; using fallback action.');
+            return '{"thought":"fallback","action":"stand"}';
+        }
+        return content;
     }
 
     parseDecision(responseText) {
@@ -1048,15 +1083,12 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
             }
         }
 
-        let movingChanged = false;
         for (const platform of this.platforms) {
             if (platform.type === 'moving') {
                 platform.x += 2;
                 if (platform.x > this.worldWidth) platform.x = -platform.width;
-                movingChanged = true;
             }
         }
-        if (movingChanged) this.rebuildTileWorld();
 
         for (const enemy of this.enemies) {
             if (!enemy.defeated) {
@@ -1162,11 +1194,10 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
 
     saveAPIKey() {
         this.apiKey = document.getElementById('apiKey').value.trim();
-        localStorage.setItem('aiSimAPIKey', this.apiKey);
     }
 
     loadAPIKey() {
-        return localStorage.getItem('aiSimAPIKey') || '';
+        return '';
     }
 
     saveAPIProvider() {
