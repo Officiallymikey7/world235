@@ -1,0 +1,14 @@
+{
+  "name": "world235",
+  "version": "1.0.0",
+  "description": "Embodied AI Agent Simulation – browser game with AI agent architecture scaffold",
+  "type": "module",
+  "main": "src/ui/chatHandler.js",
+  "scripts": {
+    "test": "node --experimental-vm-modules node_modules/.bin/jest"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1"
+  },
+  "license": "ISC"
+}
