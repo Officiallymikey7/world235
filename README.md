@@ -9,6 +9,7 @@ A production-ready, browser-based AI agent simulation built with vanilla HTML5 C
 ## 📋 Table of Contents
 
 - [Features](#features)
+- [AI Agent Architecture](#-ai-agent-architecture)
 - [Quick Start](#quick-start)
 - [Architecture](#architecture)
 - [API Integration](#api-integration)
@@ -16,6 +17,88 @@ A production-ready, browser-based AI agent simulation built with vanilla HTML5 C
 - [Configuration](#configuration)
 - [Performance](#performance)
 - [Troubleshooting](#troubleshooting)
+
+---
+
+## 🧠 AI Agent Architecture
+
+The `src/` directory contains a production-ready agent architecture scaffold that cleanly separates LLM reasoning from deterministic game execution.
+
+### Three-layer design
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Layer 1 – LLM Brain  (src/agent/)                              │
+│  • brain.js   – Sends prompts, receives raw JSON from the LLM   │
+│  • planner.js – Validates JSON against strict Ajv schema        │
+│  • prompts.js – All prompt templates in one auditable place     │
+│  • schemas.js – PlanSchema & ActionSchema (source of truth)     │
+│  • memory.js  – Write-only event store; LLM reads via context   │
+│  • loop.js    – Sense → Plan → Execute orchestration            │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ validated plan only
+┌────────────────────────────▼────────────────────────────────────┐
+│  Layer 2 – Action / Skill  (src/actions/)                       │
+│  • registry.js     – Dispatch by action name; timeout wrapper   │
+│  • gatherWood.js   – Collect wood blocks via engine adapter     │
+│  • craftChest.js   – Check inventory, craft via engine adapter  │
+│  • goTo.js         – Navigate to coords/named target            │
+│  • attackTarget.js – Locate & attack nearest entity             │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ engine API calls only
+┌────────────────────────────▼────────────────────────────────────┐
+│  Layer 3 – Engine  (src/engine/)                                │
+│  • adapter.js   – Single point of contact to the game API       │
+│  • inventory.js – Pure inventory helper utilities               │
+│  • navigation.js – Distance & nearest-entity utilities          │
+│  • worldState.js – World snapshot helpers                       │
+└─────────────────────────────────────────────────────────────────┘
+
+Safety (src/safety/):  guardrails.js – max steps, per-step timeout,
+                                       denylist, impossible-action guard
+                       validator.js  – public schema validation facade
+UI bridge (src/ui/):   chatHandler.js – handleChat() entry point
+```
+
+### Key design contracts
+
+| Contract | Detail |
+|---|---|
+| LLM output | Always JSON matching `PlanSchema` (Ajv-validated before execution) |
+| Invalid / unsafe plans | Replaced with a single `idle` safe-fallback plan |
+| Max steps | 8 per plan (enforced in `guardrails.js`) |
+| Per-step timeout | 30 s (configurable via `STEP_TIMEOUT_MS`) |
+| Denylist | `teleport`, `spawn_items`, `execute_command`, … |
+| Engine boundary | Action handlers call **only** `EngineAdapter` methods |
+
+### Quick usage
+
+```javascript
+import { handleChat }    from './src/ui/chatHandler.js';
+import { EngineAdapter } from './src/engine/adapter.js';
+import { createMemory }  from './src/agent/memory.js';
+
+const engine  = new EngineAdapter(yourGameAPI); // wire to your game/plugin
+const memory  = createMemory();
+const sensors = { findNearestBlock, findNearestEntity }; // implement for your world
+
+const result = await handleChat({
+  message:   'grab oak wood for a chest',
+  llmClient, // { generate({ system, prompt, responseFormat }) => Promise<object> }
+  engine,
+  memory,
+  sensors,
+});
+
+console.log(result.summary);
+// => ✓ Goal "gather oak wood then craft a chest" completed: gather_wood → craft_chest
+```
+
+### Dependencies added
+
+| Package | Version | Purpose |
+|---|---|---|
+| `ajv` | `^8.17.1` | JSON schema validation for LLM output |
 
 ---
 
