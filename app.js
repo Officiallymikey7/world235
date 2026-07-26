@@ -151,6 +151,20 @@ class GPURenderer {
         this.goalSprite = new PIXI.Sprite(this.textures.goal);
         this.goalSprite.anchor.set(0.5, 1);
         this.dynamicContainer.addChild(this.goalSprite);
+
+        this.refreshMovingPlatformSprites();
+    }
+
+    refreshMovingPlatformSprites() {
+        const movingPlatforms = this.game.platforms.filter(p => p.type === 'moving');
+        while (this.movingPlatformSprites.length < movingPlatforms.length) {
+            const sprite = new PIXI.Sprite(this.animatedTerrainFrames[0]);
+            this.movingPlatformSprites.push(sprite);
+            this.dynamicContainer.addChild(sprite);
+        }
+        for (let i = movingPlatforms.length; i < this.movingPlatformSprites.length; i++) {
+            this.movingPlatformSprites[i].visible = false;
+        }
     }
 
     initializeLighting() {
@@ -289,11 +303,6 @@ class GPURenderer {
         }
 
         const movingPlatforms = this.game.platforms.filter(p => p.type === 'moving');
-        while (this.movingPlatformSprites.length < movingPlatforms.length) {
-            const sprite = new PIXI.Sprite(this.animatedTerrainFrames[0]);
-            this.movingPlatformSprites.push(sprite);
-            this.dynamicContainer.addChild(sprite);
-        }
 
         for (let i = 0; i < this.enemySprites.length; i++) {
             const sprite = this.enemySprites[i];
@@ -427,8 +436,8 @@ class GPURenderer {
         this.updateCamera();
         this.updateLighting();
 
-        const dynamicCount = 2 + this.game.enemies.filter(e => !e.defeated).length + this.game.coins.filter(c => !c.collected).length;
-        this.metrics.drawCalls = 2 + dynamicCount + this.game.platforms.filter(p => p.type === 'moving').length + 1;
+        const dynamicCount = 2 + this.game.runtimeCounts.activeEnemies + this.game.runtimeCounts.activeCoins;
+        this.metrics.drawCalls = 2 + dynamicCount + this.game.runtimeCounts.movingPlatforms + 1;
 
         this.app.render();
     }
@@ -598,6 +607,12 @@ class PlatformerGame {
                 maxDrawCalls: 400
             }
         };
+        this.lastDrawCallWarningAt = 0;
+        this.runtimeCounts = {
+            activeEnemies: 0,
+            activeCoins: 0,
+            movingPlatforms: 0
+        };
 
         // API Configuration
         this.apiKey = this.loadAPIKey();
@@ -650,6 +665,10 @@ class PlatformerGame {
         };
 
         this.rebuildTileWorld();
+        this.runtimeCounts.movingPlatforms = this.platforms.filter(p => p.type === 'moving').length;
+        if (this.renderer?.app) {
+            this.renderer.refreshMovingPlatformSprites();
+        }
     }
 
     createLevel1() {
@@ -880,12 +899,11 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
 
     async callOpenAIAPI(prompt) {
         const url = 'https://api.openai.com/v1/chat/completions';
-        const authHeader = 'Bearer ' + this.apiKey;
         const response = await fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': authHeader
+                'Authorization': 'Bearer ' + this.apiKey
             },
             body: JSON.stringify({
                 model: 'gpt-3.5-turbo',
@@ -1011,6 +1029,10 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
     }
 
     updatePhysics(deltaTime) {
+        let activeEnemies = 0;
+        let activeCoins = 0;
+        let movingPlatforms = 0;
+
         if (!this.player.climbing) {
             this.player.velocityY += this.gravity;
         } else {
@@ -1059,6 +1081,7 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
 
         for (const coin of this.coins) {
             if (!coin.collected) {
+                activeCoins++;
                 const dx = this.player.x - coin.x;
                 const dy = this.player.y - coin.y;
                 const distance = Math.sqrt(dx * dx + dy * dy);
@@ -1067,6 +1090,7 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
                     coin.collected = true;
                     this.coinsCollected++;
                     this.addLogEntry('action', '🪙 Coin collected!');
+                    activeCoins--;
                 }
             }
         }
@@ -1085,6 +1109,7 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
 
         for (const platform of this.platforms) {
             if (platform.type === 'moving') {
+                movingPlatforms++;
                 platform.x += 2;
                 if (platform.x > this.worldWidth) platform.x = -platform.width;
             }
@@ -1092,12 +1117,17 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
 
         for (const enemy of this.enemies) {
             if (!enemy.defeated) {
+                activeEnemies++;
                 enemy.x += enemy.velocityX;
                 if (enemy.x < 0 || enemy.x > this.worldWidth) {
                     enemy.velocityX *= -1;
                 }
             }
         }
+
+        this.runtimeCounts.activeEnemies = activeEnemies;
+        this.runtimeCounts.activeCoins = activeCoins;
+        this.runtimeCounts.movingPlatforms = movingPlatforms;
 
         this.player.velocityX *= 0.9;
 
@@ -1194,6 +1224,7 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
 
     saveAPIKey() {
         this.apiKey = document.getElementById('apiKey').value.trim();
+        this.addLogEntry('system', '[SYSTEM] API key updated for current session.');
     }
 
     loadAPIKey() {
@@ -1215,7 +1246,7 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
         document.getElementById('apiProvider').addEventListener('change', () => this.saveAPIProvider());
 
         document.getElementById('targetTile').addEventListener('change', (e) => {
-            const level = e.target.value === 'terminal' ? 2 : 1;
+            const level = e.target.value === 'energy' ? 1 : 2;
             this.currentLevel = level;
             const name = level === 1 ? 'Level 1' : 'Level 2';
             document.getElementById('goalDisplay').textContent = `Goal: Complete ${name}`;
@@ -1288,7 +1319,8 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
             this.lastFrameTime = Date.now();
         }
 
-        if (deltaTime > 0 && this.performance.drawCalls > this.performance.acceptanceTargets.maxDrawCalls) {
+        if (deltaTime > 0 && this.performance.drawCalls > this.performance.acceptanceTargets.maxDrawCalls && Date.now() - this.lastDrawCallWarningAt > 1000) {
+            this.lastDrawCallWarningAt = Date.now();
             this.addLogEntry('system', `[SYSTEM] Draw call warning: ${this.performance.drawCalls}`);
         }
     }

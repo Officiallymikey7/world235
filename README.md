@@ -477,7 +477,7 @@ generationConfig: {
 await new Promise(resolve => setTimeout(resolve, 500)); // milliseconds between steps
 ```
 
-### Browser Storage Keys
+### Browser Storage Key
 
 ```javascript
 'aiSimProvider'    // Stores provider selection (gemini, openai, local)
