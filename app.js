@@ -1,46 +1,51 @@
-/* ==================== MARIO-STYLE EMBODIED AI AGENT SIMULATION ==================== */
-/* Production-ready vanilla JavaScript application for browser-based AI agent */
+/* ==================== 2D SIDE-SCROLLING PLATFORMER WITH AI ==================== */
+/* Production-ready vanilla JavaScript platformer game */
 
-class EmbodiedAISimulation {
+class PlatformerGame {
     constructor() {
         // Canvas & Rendering
         this.canvas = document.getElementById('gridCanvas');
         this.ctx = this.canvas.getContext('2d');
-        this.gridWidth = 15;
-        this.gridHeight = 10;
-        this.tileSize = Math.min(
-            Math.floor(this.canvas.width / this.gridWidth),
-            Math.floor(this.canvas.height / this.gridHeight)
-        );
-
-        // Grid Map (0=Floor, 1=Wall, 2=Energy Core, 3=Terminal)
-        this.mapData = this.generateMap();
+        this.cameraX = 0;
+        this.cameraY = 0;
         
-        // Agent State
-        this.agent = {
-            x: 1,
-            y: 1,
-            renderX: 1,
-            renderY: 1,
-            pathfindingPath: [],
-            targetX: null,
-            targetY: null,
-            moving: false,
-            moveProgress: 0,
-            moveDuration: 300, // ms per tile
-            failedAttempts: 0,
-            lastFailedPos: null,
-            direction: 1 // 1 for right, -1 for left
+        // World Properties
+        this.worldWidth = 3000;
+        this.worldHeight = this.canvas.height;
+        this.gravity = 0.6;
+        this.groundLevel = this.canvas.height - 100;
+        
+        // Game Objects
+        this.platforms = [];
+        this.enemies = [];
+        this.coins = [];
+        this.levelGoal = null;
+        
+        // Player/Agent
+        this.player = {
+            x: 100,
+            y: this.groundLevel - 40,
+            width: 20,
+            height: 40,
+            velocityX: 0,
+            velocityY: 0,
+            jumping: false,
+            canJump: true,
+            direction: 1, // 1 for right, -1 for left
+            maxSpeed: 6,
+            jumpPower: 12,
+            onPlatform: null,
+            climbing: false
         };
 
-        // Simulation State
+        // Game State
         this.stepCount = 0;
         this.isAutoRunning = false;
-        this.lastThought = '';
-        this.statusState = 'idle'; // idle, thinking, moving, error
-        this.targetType = 'energy'; // energy or terminal
+        this.statusState = 'idle';
+        this.coinsCollected = 0;
+        this.currentLevel = 1;
 
-        // Rendering Loop
+        // Rendering
         this.lastFrameTime = Date.now();
         this.frameCount = 0;
         this.fps = 60;
@@ -49,223 +54,177 @@ class EmbodiedAISimulation {
         this.apiKey = this.loadAPIKey();
         this.apiProvider = this.loadAPIProvider();
 
-        // Initialize UI
+        // Initialize
+        this.initializeLevel();
         this.initializeEventListeners();
         this.loadUIState();
-        this.addLogEntry('system', '[SYSTEM] Agent simulation initialized. Ready for deployment.');
+        this.addLogEntry('system', '[SYSTEM] Platformer game initialized. Ready to play!');
         
         // Start render loop
         this.startRenderLoop();
     }
 
-    /* ==================== MAP GENERATION ==================== */
-    generateMap() {
-        const map = Array(this.gridHeight).fill(null).map(() => 
-            Array(this.gridWidth).fill(0)
-        );
+    /* ==================== LEVEL GENERATION ==================== */
+    initializeLevel() {
+        this.platforms = [];
+        this.enemies = [];
+        this.coins = [];
+        this.coinsCollected = 0;
 
-        // Add walls (create corridors - Mario style platforms)
-        const walls = [
-            { x: 5, y: 3, w: 1, h: 6 },
-            { x: 10, y: 2, w: 1, h: 7 },
-            { x: 7, y: 7, w: 4, h: 1 },
-            { x: 2, y: 5, w: 2, h: 1 }
-        ];
-
-        walls.forEach(wall => {
-            for (let y = wall.y; y < wall.y + wall.h && y < this.gridHeight; y++) {
-                for (let x = wall.x; x < wall.x + wall.w && x < this.gridWidth; x++) {
-                    map[y][x] = 1;
-                }
-            }
+        // Ground platform
+        this.platforms.push({
+            x: 0,
+            y: this.groundLevel,
+            width: this.worldWidth,
+            height: 100,
+            type: 'ground'
         });
 
-        // Place Energy Core (target) - Princess/Goal
-        map[8][13] = 2;
-
-        // Place Control Terminal (secondary target)
-        map[2][12] = 3;
-
-        return map;
-    }
-
-    /* ==================== UTILITY FUNCTIONS ==================== */
-    isWalkable(x, y) {
-        if (x < 0 || x >= this.gridWidth || y < 0 || y >= this.gridHeight) {
-            return false;
-        }
-        return this.mapData[y][x] !== 1;
-    }
-
-    getWalkableNeighbors(x, y) {
-        const neighbors = [];
-        const directions = [
-            { dx: 0, dy: -1 }, { dx: 1, dy: 0 },
-            { dx: 0, dy: 1 }, { dx: -1, dy: 0 }
-        ];
-
-        for (const dir of directions) {
-            const nx = x + dir.dx;
-            const ny = y + dir.dy;
-            if (this.isWalkable(nx, ny)) {
-                neighbors.push({ x: nx, y: ny });
-            }
-        }
-        return neighbors;
-    }
-
-    /* ==================== PATHFINDING: A* ALGORITHM ==================== */
-    heuristic(x1, y1, x2, y2) {
-        return Math.abs(x2 - x1) + Math.abs(y2 - y1);
-    }
-
-    findPath(startX, startY, endX, endY) {
-        // Ensure end position is walkable, otherwise find nearest walkable position
-        if (!this.isWalkable(endX, endY)) {
-            const neighbors = this.getWalkableNeighbors(endX, endY);
-            if (neighbors.length === 0) {
-                return []; // No path possible
-            }
-            // Find closest neighbor to end position
-            let closest = neighbors[0];
-            let minDist = this.heuristic(closest.x, closest.y, endX, endY);
-            for (const n of neighbors) {
-                const dist = this.heuristic(n.x, n.y, endX, endY);
-                if (dist < minDist) {
-                    minDist = dist;
-                    closest = n;
-                }
-            }
-            endX = closest.x;
-            endY = closest.y;
+        if (this.currentLevel === 1) {
+            this.createLevel1();
+        } else if (this.currentLevel === 2) {
+            this.createLevel2();
+        } else {
+            this.createLevel1(); // Default to level 1
         }
 
-        const openSet = [];
-        const cameFrom = new Map();
-        const gScore = new Map();
-        const fScore = new Map();
-
-        const key = (x, y) => `${x},${y}`;
-        const startKey = key(startX, startY);
-        const endKey = key(endX, endY);
-
-        openSet.push({ x: startX, y: startY });
-        gScore.set(startKey, 0);
-        fScore.set(startKey, this.heuristic(startX, startY, endX, endY));
-
-        const neighbors = [
-            { dx: 0, dy: -1 }, { dx: 1, dy: 0 },
-            { dx: 0, dy: 1 }, { dx: -1, dy: 0 }
-        ];
-
-        let iterations = 0;
-        const maxIterations = 500;
-
-        while (openSet.length > 0 && iterations < maxIterations) {
-            iterations++;
-            let current = openSet[0];
-            let currentIdx = 0;
-            for (let i = 1; i < openSet.length; i++) {
-                if (fScore.get(key(openSet[i].x, openSet[i].y)) < 
-                    fScore.get(key(current.x, current.y))) {
-                    current = openSet[i];
-                    currentIdx = i;
-                }
-            }
-
-            if (current.x === endX && current.y === endY) {
-                // Reconstruct path
-                const path = [];
-                let curr = endKey;
-                while (cameFrom.has(curr)) {
-                    const [x, y] = curr.split(',').map(Number);
-                    path.unshift({ x, y });
-                    curr = cameFrom.get(curr);
-                }
-                return path;
-            }
-
-            openSet.splice(currentIdx, 1);
-
-            for (const neighbor of neighbors) {
-                const nx = current.x + neighbor.dx;
-                const ny = current.y + neighbor.dy;
-
-                if (!this.isWalkable(nx, ny)) {
-                    continue;
-                }
-
-                const nKey = key(nx, ny);
-                const tentativeGScore = gScore.get(key(current.x, current.y)) + 1;
-
-                if (!gScore.has(nKey) || tentativeGScore < gScore.get(nKey)) {
-                    cameFrom.set(nKey, key(current.x, current.y));
-                    gScore.set(nKey, tentativeGScore);
-                    fScore.set(nKey, tentativeGScore + this.heuristic(nx, ny, endX, endY));
-
-                    if (!openSet.find(p => p.x === nx && p.y === ny)) {
-                        openSet.push({ x: nx, y: ny });
-                    }
-                }
-            }
-        }
-
-        return []; // No path found
-    }
-
-    /* ==================== PERCEPTION STATE FUNCTION ==================== */
-    getPerceptionState() {
-        const energyCorePos = this.findTileType(2);
-        const terminalPos = this.findTileType(3);
-        const nearby = this.getNearbyTiles(this.agent.x, this.agent.y);
-
-        return {
-            agentPosition: { x: this.agent.x, y: this.agent.y },
-            mapBounds: { width: this.gridWidth, height: this.gridHeight },
-            energyCore: energyCorePos ? { x: energyCorePos.x, y: energyCorePos.y } : null,
-            controlTerminal: terminalPos ? { x: terminalPos.x, y: terminalPos.y } : null,
-            nearbyTiles: nearby,
-            currentTarget: this.targetType,
-            step: this.stepCount
+        // Level goal (flag)
+        this.levelGoal = {
+            x: this.worldWidth - 150,
+            y: this.groundLevel - 50,
+            width: 40,
+            height: 50,
+            collected: false
         };
     }
 
-    findTileType(type) {
-        for (let y = 0; y < this.gridHeight; y++) {
-            for (let x = 0; x < this.gridWidth; x++) {
-                if (this.mapData[y][x] === type) {
-                    return { x, y };
-                }
-            }
-        }
-        return null;
+    createLevel1() {
+        // Starting platform
+        this.platforms.push({ x: 50, y: this.groundLevel - 40, width: 200, height: 20, type: 'platform' });
+
+        // Jump sequence
+        this.platforms.push({ x: 300, y: this.groundLevel - 80, width: 150, height: 20, type: 'platform' });
+        this.platforms.push({ x: 500, y: this.groundLevel - 120, width: 150, height: 20, type: 'platform' });
+        this.platforms.push({ x: 700, y: this.groundLevel - 80, width: 150, height: 20, type: 'platform' });
+
+        // Gap to jump
+        this.platforms.push({ x: 950, y: this.groundLevel - 60, width: 200, height: 20, type: 'platform' });
+
+        // High jump
+        this.platforms.push({ x: 1250, y: this.groundLevel - 150, width: 150, height: 20, type: 'platform' });
+
+        // Moving platform section
+        this.platforms.push({ x: 1500, y: this.groundLevel - 100, width: 100, height: 20, type: 'moving' });
+        this.platforms.push({ x: 1700, y: this.groundLevel - 80, width: 150, height: 20, type: 'platform' });
+
+        // Pole section
+        this.platforms.push({ x: 1950, y: this.groundLevel - 200, width: 30, height: 200, type: 'pole' });
+        this.platforms.push({ x: 2100, y: this.groundLevel - 80, width: 150, height: 20, type: 'platform' });
+
+        // Enemy section
+        this.platforms.push({ x: 2350, y: this.groundLevel - 60, width: 200, height: 20, type: 'platform' });
+
+        // Final platform
+        this.platforms.push({ x: 2700, y: this.groundLevel - 60, width: 200, height: 20, type: 'platform' });
+
+        // Coins
+        this.coins.push({ x: 350, y: this.groundLevel - 120, collected: false });
+        this.coins.push({ x: 600, y: this.groundLevel - 160, collected: false });
+        this.coins.push({ x: 850, y: this.groundLevel - 100, collected: false });
+        this.coins.push({ x: 1100, y: this.groundLevel - 100, collected: false });
+        this.coins.push({ x: 1350, y: this.groundLevel - 200, collected: false });
+        this.coins.push({ x: 1800, y: this.groundLevel - 140, collected: false });
+        this.coins.push({ x: 2150, y: this.groundLevel - 120, collected: false });
+        this.coins.push({ x: 2450, y: this.groundLevel - 100, collected: false });
+
+        // Enemies (Goombas style)
+        this.enemies.push({ x: 1000, y: this.groundLevel - 40, width: 30, height: 30, velocityX: -2, defeated: false });
+        this.enemies.push({ x: 2400, y: this.groundLevel - 40, width: 30, height: 30, velocityX: 2, defeated: false });
     }
 
-    getNearbyTiles(centerX, centerY, range = 2) {
-        const nearby = [];
-        for (let y = Math.max(0, centerY - range); y <= Math.min(this.gridHeight - 1, centerY + range); y++) {
-            for (let x = Math.max(0, centerX - range); x <= Math.min(this.gridWidth - 1, centerX + range); x++) {
-                nearby.push({
-                    x, y,
-                    type: this.mapData[y][x],
-                    distance: Math.abs(x - centerX) + Math.abs(y - centerY)
-                });
-            }
+    createLevel2() {
+        // More challenging level
+        this.platforms.push({ x: 50, y: this.groundLevel - 40, width: 200, height: 20, type: 'platform' });
+
+        // Rapid jumps
+        for (let i = 0; i < 5; i++) {
+            this.platforms.push({
+                x: 300 + (i * 180),
+                y: this.groundLevel - 60 - (i % 2) * 40,
+                width: 140,
+                height: 20,
+                type: 'platform'
+            });
         }
-        return nearby;
+
+        // Large gap
+        this.platforms.push({ x: 1350, y: this.groundLevel - 100, width: 150, height: 20, type: 'platform' });
+
+        // Pole climb
+        this.platforms.push({ x: 1650, y: this.groundLevel - 250, width: 30, height: 250, type: 'pole' });
+        this.platforms.push({ x: 1850, y: this.groundLevel - 180, width: 150, height: 20, type: 'platform' });
+
+        // Multiple enemies
+        this.platforms.push({ x: 2150, y: this.groundLevel - 60, width: 300, height: 20, type: 'platform' });
+        this.platforms.push({ x: 2550, y: this.groundLevel - 80, width: 150, height: 20, type: 'platform' });
+
+        // Coins
+        for (let i = 0; i < 12; i++) {
+            this.coins.push({ x: 300 + (i * 150), y: this.groundLevel - 120, collected: false });
+        }
+
+        // Multiple enemies
+        this.enemies.push({ x: 800, y: this.groundLevel - 40, width: 30, height: 30, velocityX: 2, defeated: false });
+        this.enemies.push({ x: 1200, y: this.groundLevel - 40, width: 30, height: 30, velocityX: -2, defeated: false });
+        this.enemies.push({ x: 2200, y: this.groundLevel - 40, width: 30, height: 30, velocityX: 2, defeated: false });
+        this.enemies.push({ x: 2400, y: this.groundLevel - 40, width: 30, height: 30, velocityX: -2, defeated: false });
     }
 
-    /* ==================== LLM API INTEGRATION ==================== */
+    /* ==================== PERCEPTION STATE ==================== */
+    getPerceptionState() {
+        const nearbyPlatforms = this.platforms.filter(p => 
+            Math.abs(p.x - this.player.x) < 800 && Math.abs(p.y - this.player.y) < 600
+        );
+
+        const nearbyEnemies = this.enemies.filter(e =>
+            !e.defeated && Math.abs(e.x - this.player.x) < 600 && Math.abs(e.y - this.player.y) < 400
+        );
+
+        const nearbyCoin = this.coins.find(c =>
+            !c.collected && Math.abs(c.x - this.player.x) < 400 && Math.abs(c.y - this.player.y) < 400
+        );
+
+        return {
+            playerPosition: { x: this.player.x, y: this.player.y },
+            playerVelocity: { x: this.player.velocityX, y: this.player.velocityY },
+            canJump: this.player.canJump,
+            onPlatform: this.player.onPlatform ? 'yes' : 'no',
+            nearbyPlatforms: nearbyPlatforms.map(p => ({
+                x: p.x,
+                y: p.y,
+                width: p.width,
+                type: p.type
+            })),
+            nearbyEnemies: nearbyEnemies.map(e => ({
+                x: e.x,
+                y: e.y,
+                direction: e.velocityX > 0 ? 'right' : 'left'
+            })),
+            nearbyCoin: nearbyCoin ? { x: nearbyCoin.x, y: nearbyCoin.y } : null,
+            goalPosition: { x: this.levelGoal.x, y: this.levelGoal.y },
+            coinsCollected: this.coinsCollected,
+            currentLevel: this.currentLevel
+        };
+    }
+
+    /* ==================== AI DECISION MAKING ==================== */
     async fetchNextAction(perceptionState) {
-        // If no API key or local AI mode, use heuristic
         if (!this.apiKey || this.apiProvider === 'local') {
             return this.getHeuristicAction(perceptionState);
         }
 
         try {
             this.setStatus('thinking');
-            this.addLogEntry('system', '[THINKING] Processing perception state with LLM...');
-
             const prompt = this.buildPrompt(perceptionState);
             let response;
 
@@ -285,42 +244,36 @@ class EmbodiedAISimulation {
     }
 
     buildPrompt(perceptionState) {
-        const targetName = this.targetType === 'energy' ? 'Energy Core' : 'Control Terminal';
-        const targetPos = this.targetType === 'energy' ? 
-            perceptionState.energyCore : perceptionState.controlTerminal;
+        return `You are a platformer AI agent navigating a side-scrolling level.
+Player Position: (${perceptionState.playerPosition.x}, ${perceptionState.playerPosition.y})
+Can Jump: ${perceptionState.canJump}
+Goal: Reach flag at (${perceptionState.goalPosition.x}, ${perceptionState.goalPosition.y})
 
-        return `You are an embodied AI agent in a grid world simulation.
-Current perception state:
-- Your position: (${perceptionState.agentPosition.x}, ${perceptionState.agentPosition.y})
-- Map size: ${perceptionState.mapBounds.width}x${perceptionState.mapBounds.height}
-- Target: ${targetName} at (${targetPos?.x ?? '?'}, ${targetPos?.y ?? '?'})
-- Nearby tiles (type: 0=floor, 1=wall, 2=energy, 3=terminal):
-${perceptionState.nearbyTiles.map(t => `  (${t.x},${t.y}): type=${t.type}`).join('\n')}
+Nearby Platforms: ${JSON.stringify(perceptionState.nearbyPlatforms.slice(0, 5))}
+Nearby Enemies: ${JSON.stringify(perceptionState.nearbyEnemies.slice(0, 3))}
+Nearby Coin: ${perceptionState.nearbyCoin ? `(${perceptionState.nearbyCoin.x}, ${perceptionState.nearbyCoin.y})` : 'none'}
 
-Your task: Navigate to the ${targetName}. ALWAYS avoid walls (type=1).
+Decide your action:
+- "jump_left": Jump and move left
+- "jump_right": Jump and move right
+- "move_left": Walk left
+- "move_right": Walk right
+- "climb": Climb pole (if available)
+- "stand": Stand still
 
-Respond in JSON format ONLY, no extra text:
-{"thought": "brief reasoning about next move", "target_x": <number>, "target_y": <number>}`;
+Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
     }
 
     async callGeminiAPI(prompt) {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${this.apiKey}`;
-        const payload = {
-            contents: [{
-                parts: [{ text: prompt }]
-            }],
-            generationConfig: {
-                temperature: 0.7,
-                maxOutputTokens: 200
-            }
-        };
-
         const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: { temperature: 0.7, maxOutputTokens: 200 }
+            })
         });
-
         if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
         const data = await response.json();
         return data.candidates[0].content.parts[0].text;
@@ -328,22 +281,19 @@ Respond in JSON format ONLY, no extra text:
 
     async callOpenAIAPI(prompt) {
         const url = 'https://api.openai.com/v1/chat/completions';
-        const payload = {
-            model: 'gpt-3.5-turbo',
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.7,
-            max_tokens: 200
-        };
-
         const response = await fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${this.apiKey}`
             },
-            body: JSON.stringify(payload)
+            body: JSON.stringify({
+                model: 'gpt-3.5-turbo',
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.7,
+                max_tokens: 200
+            })
         });
-
         if (!response.ok) throw new Error(`OpenAI API error: ${response.status}`);
         const data = await response.json();
         return data.choices[0].message.content;
@@ -353,13 +303,9 @@ Respond in JSON format ONLY, no extra text:
         try {
             const jsonMatch = responseText.match(/\{[\s\S]*\}/);
             const json = JSON.parse(jsonMatch?.[0] || responseText);
-            const targetX = Math.max(0, Math.min(this.gridWidth - 1, parseInt(json.target_x) || 0));
-            const targetY = Math.max(0, Math.min(this.gridHeight - 1, parseInt(json.target_y) || 0));
-            
             return {
-                thought: json.thought || 'Moving to target',
-                target_x: targetX,
-                target_y: targetY
+                thought: json.thought || 'Making decision',
+                action: json.action || 'stand'
             };
         } catch (e) {
             return this.getHeuristicAction(this.getPerceptionState());
@@ -367,236 +313,290 @@ Respond in JSON format ONLY, no extra text:
     }
 
     getHeuristicAction(perceptionState) {
-        const target = this.targetType === 'energy' ? 
-            perceptionState.energyCore : perceptionState.controlTerminal;
+        const goalX = perceptionState.goalPosition.x;
+        const playerX = perceptionState.playerPosition.x;
 
-        if (!target) {
-            return {
-                thought: 'Target not found, exploring...',
-                target_x: Math.floor(Math.random() * this.gridWidth),
-                target_y: Math.floor(Math.random() * this.gridHeight)
-            };
+        // Prioritize moving toward goal
+        if (goalX > playerX + 50) {
+            if (perceptionState.canJump) {
+                return { thought: 'Jumping right toward goal', action: 'jump_right' };
+            }
+            return { thought: 'Moving right toward goal', action: 'move_right' };
+        } else if (goalX < playerX - 50) {
+            if (perceptionState.canJump) {
+                return { thought: 'Jumping left toward goal', action: 'jump_left' };
+            }
+            return { thought: 'Moving left toward goal', action: 'move_left' };
         }
 
-        // Instead of naive step-by-step, use full pathfinding
-        const path = this.findPath(
-            perceptionState.agentPosition.x,
-            perceptionState.agentPosition.y,
-            target.x,
-            target.y
-        );
-
-        if (path.length > 0) {
-            // Follow the path
-            const nextStep = path[0];
-            return {
-                thought: `Following path towards ${this.targetType === 'energy' ? 'Energy Core' : 'Terminal'} at (${target.x}, ${target.y})`,
-                target_x: nextStep.x,
-                target_y: nextStep.y
-            };
-        } else {
-            // If no path found, pick a random walkable neighbor
-            const neighbors = this.getWalkableNeighbors(
-                perceptionState.agentPosition.x,
-                perceptionState.agentPosition.y
-            );
-
-            if (neighbors.length > 0) {
-                const randomNeighbor = neighbors[Math.floor(Math.random() * neighbors.length)];
-                return {
-                    thought: 'No direct path found, exploring nearby area...',
-                    target_x: randomNeighbor.x,
-                    target_y: randomNeighbor.y
-                };
-            } else {
-                return {
-                    thought: 'Stuck, unable to move',
-                    target_x: perceptionState.agentPosition.x,
-                    target_y: perceptionState.agentPosition.y
-                };
+        // Collect nearby coins
+        if (perceptionState.nearbyCoin) {
+            if (perceptionState.nearbyCoin.x > playerX + 20 && perceptionState.canJump) {
+                return { thought: 'Jumping for coin on right', action: 'jump_right' };
+            } else if (perceptionState.nearbyCoin.x < playerX - 20 && perceptionState.canJump) {
+                return { thought: 'Jumping for coin on left', action: 'jump_left' };
             }
         }
+
+        return { thought: 'Exploring level', action: 'move_right' };
     }
 
-    /* ==================== AGENT MOVEMENT ==================== */
-    async executeAction(decision) {
-        const targetX = decision.target_x;
-        const targetY = decision.target_y;
+    /* ==================== GAME PHYSICS & MOVEMENT ==================== */
+    executeAction(action) {
+        const { thought } = action;
+        this.addLogEntry('thought', `💭 ${thought}`);
 
-        this.addLogEntry('thought', `💭 ${decision.thought}`);
-
-        // Check if target is walkable
-        if (!this.isWalkable(targetX, targetY)) {
-            this.addLogEntry('action', `⚠️  Wall at (${targetX}, ${targetY}), finding alternate path...`);
-            
-            // Try to find nearest walkable alternative
-            const neighbors = this.getWalkableNeighbors(targetX, targetY);
-            if (neighbors.length > 0) {
-                // Pick the neighbor closest to original target
-                let best = neighbors[0];
-                let minDist = this.heuristic(best.x, best.y, targetX, targetY);
-                
-                for (const neighbor of neighbors) {
-                    const dist = this.heuristic(neighbor.x, neighbor.y, targetX, targetY);
-                    if (dist < minDist) {
-                        minDist = dist;
-                        best = neighbor;
-                    }
+        switch(action.action) {
+            case 'jump_left':
+                if (this.player.canJump) {
+                    this.player.velocityY = -this.player.jumpPower;
+                    this.player.velocityX = -this.player.maxSpeed;
+                    this.player.canJump = false;
+                    this.player.jumping = true;
+                    this.player.direction = -1;
                 }
-                
-                const path = this.findPath(this.agent.x, this.agent.y, best.x, best.y);
-                if (path.length > 0) {
-                    this.agent.pathfindingPath = path;
-                    this.agent.targetX = path[0].x;
-                    this.agent.targetY = path[0].y;
-                    this.agent.moving = true;
-                    this.agent.moveProgress = 0;
-                    this.setStatus('moving');
-                    this.addLogEntry('action', `🚀 Rerouting to (${best.x}, ${best.y})...`);
-                    return true;
+                break;
+            case 'jump_right':
+                if (this.player.canJump) {
+                    this.player.velocityY = -this.player.jumpPower;
+                    this.player.velocityX = this.player.maxSpeed;
+                    this.player.canJump = false;
+                    this.player.jumping = true;
+                    this.player.direction = 1;
                 }
-            }
-            
-            this.addLogEntry('error', `❌ Cannot reach (${targetX}, ${targetY}), no walkable path`);
-            this.agent.failedAttempts++;
-            return false;
-        }
-
-        // Calculate path using A*
-        const path = this.findPath(this.agent.x, this.agent.y, targetX, targetY);
-
-        if (path.length > 0) {
-            this.agent.pathfindingPath = path;
-            this.agent.targetX = path[0].x;
-            this.agent.targetY = path[0].y;
-            this.agent.moving = true;
-            this.agent.moveProgress = 0;
-            this.agent.failedAttempts = 0;
-            this.setStatus('moving');
-            this.addLogEntry('action', `🚀 Navigating to (${targetX}, ${targetY})...`);
-            return true;
-        } else {
-            this.addLogEntry('error', `❌ No path found to (${targetX}, ${targetY})`);
-            this.agent.failedAttempts++;
-            return false;
-        }
-    }
-
-    /* ==================== SIMULATION STEP ==================== */
-    async runStep() {
-        if (this.agent.moving) {
-            // Continue current movement
-            return;
+                break;
+            case 'move_left':
+                this.player.velocityX = -this.player.maxSpeed;
+                this.player.direction = -1;
+                break;
+            case 'move_right':
+                this.player.velocityX = this.player.maxSpeed;
+                this.player.direction = 1;
+                break;
+            case 'climb':
+                this.attemptClimb();
+                break;
+            case 'stand':
+                this.player.velocityX *= 0.8;
+                break;
         }
 
         this.stepCount++;
-        const perception = this.getPerceptionState();
-        const decision = await this.fetchNextAction(perception);
-        
-        // Update direction based on movement
-        if (decision.target_x > this.agent.x) {
-            this.agent.direction = 1; // Moving right
-        } else if (decision.target_x < this.agent.x) {
-            this.agent.direction = -1; // Moving left
-        }
-        
-        await this.executeAction(decision);
-
         this.updateStats();
+    }
+
+    attemptClimb() {
+        // Check if on a pole
+        for (const platform of this.platforms) {
+            if (platform.type === 'pole' &&
+                this.player.x >= platform.x && this.player.x <= platform.x + platform.width &&
+                this.player.y >= platform.y && this.player.y <= platform.y + platform.height) {
+                this.player.climbing = true;
+                this.player.velocityY = -5;
+                this.player.canJump = false;
+                return;
+            }
+        }
+    }
+
+    updatePhysics(deltaTime) {
+        const dt = deltaTime / 1000; // Convert to seconds
+
+        // Apply gravity
+        if (!this.player.climbing) {
+            this.player.velocityY += this.gravity;
+        } else {
+            this.player.velocityY = 0;
+        }
+
+        // Update position
+        this.player.x += this.player.velocityX;
+        this.player.y += this.player.velocityY;
+
+        // Collision detection with platforms
+        this.player.canJump = false;
+        this.player.onPlatform = null;
+
+        for (const platform of this.platforms) {
+            // Check if player is above platform and falling
+            if (this.player.velocityY >= 0 &&
+                this.player.y + this.player.height >= platform.y &&
+                this.player.y + this.player.height <= platform.y + 20 &&
+                this.player.x + this.player.width > platform.x &&
+                this.player.x < platform.x + platform.width) {
+                
+                this.player.y = platform.y - this.player.height;
+                this.player.velocityY = 0;
+                this.player.canJump = true;
+                this.player.onPlatform = platform;
+                this.player.climbing = false;
+            }
+        }
+
+        // Collision with enemies (bounce or defeat)
+        for (const enemy of this.enemies) {
+            if (!enemy.defeated) {
+                const dx = this.player.x - enemy.x;
+                const dy = this.player.y - enemy.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < 40) {
+                    if (this.player.velocityY > 0 && this.player.y < enemy.y) {
+                        // Jump on enemy
+                        enemy.defeated = true;
+                        this.player.velocityY = -10;
+                        this.addLogEntry('action', '🦗 Enemy defeated!');
+                    } else if (this.player.y < 100) {
+                        // Knock back player
+                        this.player.velocityX = -this.player.velocityX;
+                    }
+                }
+            }
+        }
+
+        // Collect coins
+        for (const coin of this.coins) {
+            if (!coin.collected) {
+                const dx = this.player.x - coin.x;
+                const dy = this.player.y - coin.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < 30) {
+                    coin.collected = true;
+                    this.coinsCollected++;
+                    this.addLogEntry('action', '🪙 Coin collected!');
+                }
+            }
+        }
+
+        // Collect goal
+        if (!this.levelGoal.collected) {
+            const dx = this.player.x - this.levelGoal.x;
+            const dy = this.player.y - this.levelGoal.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance < 50) {
+                this.levelGoal.collected = true;
+                this.addLogEntry('action', `🚩 LEVEL ${this.currentLevel} COMPLETE! Moving to next level...`);
+                setTimeout(() => this.nextLevel(), 2000);
+            }
+        }
+
+        // Update moving platforms
+        for (const platform of this.platforms) {
+            if (platform.type === 'moving') {
+                platform.x += 2;
+                if (platform.x > this.worldWidth) platform.x = -platform.width;
+            }
+        }
+
+        // Update enemies
+        for (const enemy of this.enemies) {
+            if (!enemy.defeated) {
+                enemy.x += enemy.velocityX;
+                if (enemy.x < 0 || enemy.x > this.worldWidth) {
+                    enemy.velocityX *= -1;
+                }
+            }
+        }
+
+        // World bounds
+        if (this.player.x < 0) this.player.x = 0;
+        if (this.player.x > this.worldWidth) this.player.x = this.worldWidth;
+        if (this.player.y > this.worldHeight) this.resetLevel();
+
+        // Update camera
+        this.cameraX = Math.max(0, this.player.x - 200);
     }
 
     /* ==================== RENDERING ==================== */
     render(deltaTime) {
-        // Clear canvas - Mario sky blue
-        this.ctx.fillStyle = '#5c94fc';
+        // Update physics
+        this.updatePhysics(deltaTime);
+
+        // Clear canvas
+        this.ctx.fillStyle = '#87ceeb'; // Sky blue
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-        // Draw grid tiles
-        this.drawGridTiles();
+        // Draw distant background
+        this.ctx.fillStyle = '#e0f6ff';
+        this.ctx.fillRect(0, this.canvas.height * 0.7, this.canvas.width, this.canvas.height * 0.3);
 
-        // Update agent position if moving
-        this.updateAgentMovement(deltaTime);
+        // Set up clipping for world view
+        this.ctx.save();
+        this.ctx.translate(-this.cameraX, 0);
 
-        // Draw agent
+        // Draw platforms
+        for (const platform of this.platforms) {
+            this.drawPlatform(platform);
+        }
+
+        // Draw enemies
+        for (const enemy of this.enemies) {
+            if (!enemy.defeated) {
+                this.drawEnemy(enemy);
+            }
+        }
+
+        // Draw coins
+        for (const coin of this.coins) {
+            if (!coin.collected) {
+                this.drawCoin(coin);
+            }
+        }
+
+        // Draw goal
+        this.drawGoal();
+
+        // Draw player
         this.drawStickman();
 
-        // Update FPS counter
+        this.ctx.restore();
+
+        // Draw UI overlay
+        this.drawUI();
+
         this.updateFPS(deltaTime);
     }
 
-    drawGridTiles() {
-        const colors = {
-            0: '#5c94fc', // Sky floor
-            1: '#8b4513', // Brown wood blocks
-            2: '#ffcc00', // Gold coin (Energy Core)
-            3: '#ff0000'  // Red terminal (Lava or flag)
-        };
+    drawPlatform(platform) {
+        this.ctx.fillStyle = '#8b4513';
 
-        for (let y = 0; y < this.gridHeight; y++) {
-            for (let x = 0; x < this.gridWidth; x++) {
-                const tileType = this.mapData[y][x];
-                const px = x * this.tileSize;
-                const py = y * this.tileSize;
-
-                // Draw tile background
-                this.ctx.fillStyle = colors[tileType];
-                this.ctx.fillRect(px, py, this.tileSize, this.tileSize);
-
-                // Draw special tile effects
-                if (tileType === 1) {
-                    // Brick block - draw brick pattern
-                    this.ctx.strokeStyle = '#654321';
-                    this.ctx.lineWidth = 2;
-                    this.ctx.strokeRect(px + 2, py + 2, this.tileSize - 4, this.tileSize - 4);
-                    
-                    // Brick grid
-                    this.ctx.lineWidth = 1;
-                    this.ctx.beginPath();
-                    this.ctx.moveTo(px + this.tileSize / 2, py + 2);
-                    this.ctx.lineTo(px + this.tileSize / 2, py + this.tileSize - 2);
-                    this.ctx.stroke();
-                    this.ctx.beginPath();
-                    this.ctx.moveTo(px + 2, py + this.tileSize / 2);
-                    this.ctx.lineTo(px + this.tileSize - 2, py + this.tileSize / 2);
-                    this.ctx.stroke();
-                } else if (tileType === 2) {
-                    // Coin - draw circle with shine
-                    const centerX = px + this.tileSize / 2;
-                    const centerY = py + this.tileSize / 2;
-                    const radius = this.tileSize / 3;
-                    
-                    this.ctx.fillStyle = '#ffcc00';
-                    this.ctx.beginPath();
-                    this.ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-                    this.ctx.fill();
-                    
-                    // Shine effect
-                    this.ctx.fillStyle = '#ffff99';
-                    this.ctx.beginPath();
-                    this.ctx.arc(centerX - radius / 3, centerY - radius / 3, radius / 3, 0, Math.PI * 2);
-                    this.ctx.fill();
-                } else if (tileType === 3) {
-                    // Flag/Lava - draw triangle flag
-                    const centerX = px + this.tileSize / 2;
-                    const centerY = py + this.tileSize / 2;
-                    const size = this.tileSize / 2.5;
-                    
-                    this.ctx.fillStyle = '#ff0000';
-                    this.ctx.beginPath();
-                    this.ctx.moveTo(centerX, centerY - size);
-                    this.ctx.lineTo(centerX + size, centerY);
-                    this.ctx.lineTo(centerX, centerY + size);
-                    this.ctx.closePath();
-                    this.ctx.fill();
-                }
+        if (platform.type === 'pole') {
+            this.ctx.fillStyle = '#654321';
+            this.ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+            // Draw pole rings
+            for (let i = 0; i < platform.height; i += 15) {
+                this.ctx.strokeStyle = '#4a2511';
+                this.ctx.lineWidth = 2;
+                this.ctx.beginPath();
+                this.ctx.arc(platform.x + platform.width / 2, platform.y + i, platform.width / 2, 0, Math.PI * 2);
+                this.ctx.stroke();
+            }
+        } else if (platform.type === 'moving') {
+            this.ctx.fillStyle = '#ff8c00';
+            this.ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+            this.ctx.strokeStyle = '#ff6600';
+            this.ctx.lineWidth = 2;
+            this.ctx.strokeRect(platform.x + 5, platform.y + 5, platform.width - 10, platform.height - 10);
+        } else {
+            this.ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+            // Draw brick pattern
+            this.ctx.strokeStyle = '#654321';
+            this.ctx.lineWidth = 1;
+            for (let x = platform.x; x < platform.x + platform.width; x += 20) {
+                this.ctx.beginPath();
+                this.ctx.moveTo(x, platform.y);
+                this.ctx.lineTo(x, platform.y + platform.height);
+                this.ctx.stroke();
             }
         }
     }
 
     drawStickman() {
-        const px = this.agent.renderX * this.tileSize + this.tileSize / 2;
-        const py = this.agent.renderY * this.tileSize + this.tileSize / 2;
-        const scale = this.tileSize / 40;
+        const px = this.player.x;
+        const py = this.player.y;
+        const scale = 1;
 
         this.ctx.strokeStyle = '#000000';
         this.ctx.fillStyle = '#000000';
@@ -605,29 +605,26 @@ Respond in JSON format ONLY, no extra text:
         this.ctx.lineJoin = 'round';
 
         // Head
-        const headRadius = 5 * scale;
         this.ctx.beginPath();
-        this.ctx.arc(px, py - 12 * scale, headRadius, 0, Math.PI * 2);
+        this.ctx.arc(px, py - 12 * scale, 5 * scale, 0, Math.PI * 2);
         this.ctx.fill();
 
         // Eyes
-        const eyeOffset = 2 * scale;
         this.ctx.fillStyle = '#ffffff';
         this.ctx.beginPath();
-        this.ctx.arc(px - eyeOffset, py - 13 * scale, 1.5 * scale, 0, Math.PI * 2);
+        this.ctx.arc(px - 2 * scale, py - 13 * scale, 1.5 * scale, 0, Math.PI * 2);
         this.ctx.fill();
         this.ctx.beginPath();
-        this.ctx.arc(px + eyeOffset, py - 13 * scale, 1.5 * scale, 0, Math.PI * 2);
+        this.ctx.arc(px + 2 * scale, py - 13 * scale, 1.5 * scale, 0, Math.PI * 2);
         this.ctx.fill();
 
         // Pupils
-        const pupilDir = this.agent.direction; // Face direction
         this.ctx.fillStyle = '#000000';
         this.ctx.beginPath();
-        this.ctx.arc(px - eyeOffset + (pupilDir * 0.5 * scale), py - 13 * scale, 0.8 * scale, 0, Math.PI * 2);
+        this.ctx.arc(px - 2 * scale + (this.player.direction * 0.5 * scale), py - 13 * scale, 0.8 * scale, 0, Math.PI * 2);
         this.ctx.fill();
         this.ctx.beginPath();
-        this.ctx.arc(px + eyeOffset + (pupilDir * 0.5 * scale), py - 13 * scale, 0.8 * scale, 0, Math.PI * 2);
+        this.ctx.arc(px + 2 * scale + (this.player.direction * 0.5 * scale), py - 13 * scale, 0.8 * scale, 0, Math.PI * 2);
         this.ctx.fill();
 
         // Body
@@ -636,69 +633,114 @@ Respond in JSON format ONLY, no extra text:
         this.ctx.lineTo(px, py + 3 * scale);
         this.ctx.stroke();
 
-        // Left Arm
+        // Arms
+        const armSwing = Math.sin(this.stepCount * 0.05) * 2;
         this.ctx.beginPath();
         this.ctx.moveTo(px, py - 2 * scale);
-        this.ctx.lineTo(px - 8 * scale * this.agent.direction, py + 1 * scale);
+        this.ctx.lineTo(px - 8 * scale * this.player.direction + armSwing, py + 1 * scale);
         this.ctx.stroke();
 
-        // Right Arm
         this.ctx.beginPath();
         this.ctx.moveTo(px, py - 2 * scale);
-        this.ctx.lineTo(px + 8 * scale * this.agent.direction, py + 1 * scale);
+        this.ctx.lineTo(px + 8 * scale * this.player.direction - armSwing, py + 1 * scale);
         this.ctx.stroke();
 
-        // Left Leg
+        // Legs
+        const legSwing = Math.sin(this.stepCount * 0.05) * 2;
         this.ctx.beginPath();
         this.ctx.moveTo(px, py + 3 * scale);
-        this.ctx.lineTo(px - 5 * scale, py + 10 * scale);
+        this.ctx.lineTo(px - 5 * scale + legSwing, py + 10 * scale);
         this.ctx.stroke();
 
-        // Right Leg
         this.ctx.beginPath();
         this.ctx.moveTo(px, py + 3 * scale);
-        this.ctx.lineTo(px + 5 * scale, py + 10 * scale);
+        this.ctx.lineTo(px + 5 * scale - legSwing, py + 10 * scale);
         this.ctx.stroke();
     }
 
-    updateAgentMovement(deltaTime) {
-        if (!this.agent.moving) return;
+    drawEnemy(enemy) {
+        const px = enemy.x;
+        const py = enemy.y;
 
-        this.agent.moveProgress += deltaTime / this.agent.moveDuration;
+        // Goomba style enemy
+        this.ctx.fillStyle = '#8b4513';
+        this.ctx.beginPath();
+        this.ctx.ellipse(px, py, enemy.width / 2, enemy.height / 2, 0, 0, Math.PI * 2);
+        this.ctx.fill();
 
-        if (this.agent.moveProgress >= 1) {
-            this.agent.moveProgress = 1;
-            this.agent.x = this.agent.targetX;
-            this.agent.y = this.agent.targetY;
-            this.agent.renderX = this.agent.x;
-            this.agent.renderY = this.agent.y;
+        // Eyes
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.beginPath();
+        this.ctx.arc(px - 5, py - 8, 2, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.beginPath();
+        this.ctx.arc(px + 5, py - 8, 2, 0, Math.PI * 2);
+        this.ctx.fill();
 
-            // Move to next waypoint or stop
-            if (this.agent.pathfindingPath.length > 0) {
-                this.agent.pathfindingPath.shift();
-                if (this.agent.pathfindingPath.length > 0) {
-                    const next = this.agent.pathfindingPath[0];
-                    this.agent.targetX = next.x;
-                    this.agent.targetY = next.y;
-                    this.agent.moveProgress = 0;
-                } else {
-                    this.agent.moving = false;
-                    this.agent.targetX = null;
-                    this.agent.targetY = null;
-                    this.setStatus('idle');
-                    this.checkGoalReached();
-                }
-            }
-        } else {
-            // Smooth interpolation
-            const easing = this.easeInOutQuad(this.agent.moveProgress);
-            this.agent.renderX = this.agent.x + (this.agent.targetX - this.agent.x) * easing;
-            this.agent.renderY = this.agent.y + (this.agent.targetY - this.agent.y) * easing;
-        }
+        // Pupils
+        this.ctx.fillStyle = '#000000';
+        this.ctx.beginPath();
+        this.ctx.arc(px - 5 + (Math.sign(enemy.velocityX) * 0.5), py - 8, 1, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.beginPath();
+        this.ctx.arc(px + 5 + (Math.sign(enemy.velocityX) * 0.5), py - 8, 1, 0, Math.PI * 2);
+        this.ctx.fill();
     }
 
-    easeInOutQuad(t) {
-        return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+    drawCoin(coin) {
+        const px = coin.x;
+        const py = coin.y;
+        const radius = 6;
+
+        this.ctx.fillStyle = '#ffcc00';
+        this.ctx.beginPath();
+        this.ctx.arc(px, py, radius, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        // Shine
+        this.ctx.fillStyle = '#ffff99';
+        this.ctx.beginPath();
+        this.ctx.arc(px - radius / 3, py - radius / 3, radius / 3, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        // Spin effect
+        this.ctx.strokeStyle = '#ff9900';
+        this.ctx.lineWidth = 1;
+        const angle = this.stepCount * 0.1;
+        this.ctx.beginPath();
+        this.ctx.arc(px, py, radius - 2, angle, angle + Math.PI);
+        this.ctx.stroke();
+    }
+
+    drawGoal() {
+        const px = this.levelGoal.x;
+        const py = this.levelGoal.y;
+        const w = this.levelGoal.width;
+        const h = this.levelGoal.height;
+
+        // Pole
+        this.ctx.fillStyle = '#654321';
+        this.ctx.fillRect(px + w / 2 - 2, py + h - 10, 4, 10);
+
+        // Flag
+        this.ctx.fillStyle = '#ff0000';
+        this.ctx.beginPath();
+        this.ctx.moveTo(px + w / 2, py);
+        this.ctx.lineTo(px + w / 2 + w / 2, py + h / 4);
+        this.ctx.lineTo(px + w / 2, py + h / 2);
+        this.ctx.closePath();
+        this.ctx.fill();
+    }
+
+    drawUI() {
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        this.ctx.fillRect(0, 0, this.canvas.width, 40);
+
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.font = 'bold 18px Arial';
+        this.ctx.fillText(`Level: ${this.currentLevel}`, 20, 25);
+        this.ctx.fillText(`Coins: ${this.coinsCollected}`, 150, 25);
+        this.ctx.fillText(`Position: ${Math.floor(this.player.x)}`, 300, 25);
     }
 
     updateFPS(deltaTime) {
@@ -711,27 +753,35 @@ Respond in JSON format ONLY, no extra text:
         }
     }
 
-    checkGoalReached() {
-        const targetType = this.targetType === 'energy' ? 2 : 3;
-        if (this.mapData[this.agent.y]?.[this.agent.x] === targetType) {
-            this.addLogEntry('action', `✅ GOAL REACHED! ${this.targetType === 'energy' ? 'Coin' : 'Flag'} acquired!`);
-            this.setStatus('idle');
+    /* ==================== LEVEL MANAGEMENT ==================== */
+    nextLevel() {
+        this.currentLevel++;
+        if (this.currentLevel > 2) {
+            this.addLogEntry('action', '🎉 GAME COMPLETE! All levels finished!');
+            this.currentLevel = 1;
         }
+        this.player.x = 100;
+        this.player.y = this.groundLevel - 40;
+        this.player.velocityX = 0;
+        this.player.velocityY = 0;
+        this.initializeLevel();
+    }
+
+    resetLevel() {
+        this.player.x = 100;
+        this.player.y = this.groundLevel - 40;
+        this.player.velocityX = 0;
+        this.player.velocityY = 0;
+        this.addLogEntry('error', '❌ Fell off the level!');
     }
 
     /* ==================== UI STATE MANAGEMENT ==================== */
     updateStats() {
         document.getElementById('stepCounter').textContent = this.stepCount;
         document.getElementById('positionDisplay').textContent = 
-            `${this.agent.x}, ${this.agent.y}`;
-
-        const target = this.targetType === 'energy' ? 
-            this.findTileType(2) : this.findTileType(3);
-        if (target) {
-            const distance = Math.abs(target.x - this.agent.x) + 
-                           Math.abs(target.y - this.agent.y);
-            document.getElementById('distanceDisplay').textContent = distance;
-        }
+            `${Math.floor(this.player.x)}, ${Math.floor(this.player.y)}`;
+        document.getElementById('distanceDisplay').textContent = 
+            `Level ${this.currentLevel}`;
     }
 
     addLogEntry(type, message) {
@@ -742,7 +792,6 @@ Respond in JSON format ONLY, no extra text:
         logTerminal.appendChild(entry);
         logTerminal.scrollTop = logTerminal.scrollHeight;
 
-        // Keep log size manageable
         if (logTerminal.children.length > 50) {
             logTerminal.removeChild(logTerminal.firstChild);
         }
@@ -752,7 +801,6 @@ Respond in JSON format ONLY, no extra text:
         this.statusState = status;
         const indicator = document.getElementById('statusIndicator');
         indicator.className = 'status-indicator';
-        
         if (status === 'error') {
             indicator.classList.add('error');
         } else if (status === 'idle') {
@@ -763,49 +811,48 @@ Respond in JSON format ONLY, no extra text:
     /* ==================== LOCAL STORAGE ==================== */
     saveAPIKey() {
         const key = document.getElementById('apiKey').value;
-        localStorage.setItem('aiSimAPIKey', key);
+        localStorage.setItem('platformerAPIKey', key);
         this.apiKey = key;
-        this.addLogEntry('system', '[SYSTEM] API key saved locally.');
+        this.addLogEntry('system', '[SYSTEM] API key saved.');
     }
 
     loadAPIKey() {
-        return localStorage.getItem('aiSimAPIKey') || '';
+        return localStorage.getItem('platformerAPIKey') || '';
     }
 
     saveAPIProvider() {
         const provider = document.getElementById('apiProvider').value;
-        localStorage.setItem('aiSimProvider', provider);
+        localStorage.setItem('platformerProvider', provider);
         this.apiProvider = provider;
     }
 
     loadAPIProvider() {
-        return localStorage.getItem('aiSimProvider') || 'local';
+        return localStorage.getItem('platformerProvider') || 'local';
     }
 
     loadUIState() {
-        const apiKey = this.loadAPIKey();
-        document.getElementById('apiKey').value = apiKey;
+        document.getElementById('apiKey').value = this.loadAPIKey();
         document.getElementById('apiProvider').value = this.loadAPIProvider();
     }
 
     /* ==================== EVENT LISTENERS ==================== */
     initializeEventListeners() {
-        // API Key saving
         document.getElementById('apiKey').addEventListener('change', () => this.saveAPIKey());
         document.getElementById('apiProvider').addEventListener('change', () => this.saveAPIProvider());
 
-        // Target selection
         document.getElementById('targetTile').addEventListener('change', (e) => {
-            this.targetType = e.target.value;
-            const name = this.targetType === 'energy' ? 'Collect the Coin' : 'Reach the Flag';
-            document.getElementById('goalDisplay').textContent = `Goal: ${name}`;
-            this.addLogEntry('system', `[SYSTEM] Target changed to: ${name}`);
+            const name = e.target.value === 'level1' ? 'Level 1' : 'Level 2';
+            document.getElementById('goalDisplay').textContent = `Goal: Complete ${name}`;
         });
 
-        // Control buttons
-        document.getElementById('runStepBtn').addEventListener('click', () => this.runStep());
+        document.getElementById('runStepBtn').addEventListener('click', async () => {
+            const perception = this.getPerceptionState();
+            const decision = await this.fetchNextAction(perception);
+            this.executeAction(decision);
+        });
+
         document.getElementById('autoRunBtn').addEventListener('click', () => this.toggleAutoRun());
-        document.getElementById('resetBtn').addEventListener('click', () => this.resetSimulation());
+        document.getElementById('resetBtn').addEventListener('click', () => this.resetLevel());
     }
 
     toggleAutoRun() {
@@ -823,34 +870,11 @@ Respond in JSON format ONLY, no extra text:
 
     async autoRunLoop() {
         while (this.isAutoRunning) {
-            await this.runStep();
-            await new Promise(resolve => setTimeout(resolve, 500));
+            const perception = this.getPerceptionState();
+            const decision = await this.fetchNextAction(perception);
+            this.executeAction(decision);
+            await new Promise(resolve => setTimeout(resolve, 200));
         }
-    }
-
-    resetSimulation() {
-        this.agent = {
-            x: 1,
-            y: 1,
-            renderX: 1,
-            renderY: 1,
-            pathfindingPath: [],
-            targetX: null,
-            targetY: null,
-            moving: false,
-            moveProgress: 0,
-            moveDuration: 300,
-            failedAttempts: 0,
-            lastFailedPos: null,
-            direction: 1
-        };
-        this.stepCount = 0;
-        this.isAutoRunning = false;
-        this.setStatus('idle');
-        document.getElementById('autoRunBtn').style.opacity = '0.6';
-        document.getElementById('logTerminal').innerHTML = '<div class="log-entry system">[SYSTEM] Simulation reset.</div>';
-        this.updateStats();
-        this.addLogEntry('system', '[SYSTEM] Ready for new mission.');
     }
 
     /* ==================== RENDER LOOP ==================== */
@@ -872,6 +896,6 @@ Respond in JSON format ONLY, no extra text:
 
 /* ==================== INITIALIZATION ==================== */
 document.addEventListener('DOMContentLoaded', () => {
-    window.simulation = new EmbodiedAISimulation();
-    console.log('🤖 Mario-style AI Agent Simulation initialized');
+    window.game = new PlatformerGame();
+    console.log('🎮 2D Side-Scrolling Platformer initialized');
 });
