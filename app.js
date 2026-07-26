@@ -1,4 +1,4 @@
-/* ==================== EMBODIED AI AGENT SIMULATION ==================== */
+/* ==================== MARIO-STYLE EMBODIED AI AGENT SIMULATION ==================== */
 /* Production-ready vanilla JavaScript application for browser-based AI agent */
 
 class EmbodiedAISimulation {
@@ -29,7 +29,8 @@ class EmbodiedAISimulation {
             moveProgress: 0,
             moveDuration: 300, // ms per tile
             failedAttempts: 0,
-            lastFailedPos: null
+            lastFailedPos: null,
+            direction: 1 // 1 for right, -1 for left
         };
 
         // Simulation State
@@ -63,7 +64,7 @@ class EmbodiedAISimulation {
             Array(this.gridWidth).fill(0)
         );
 
-        // Add walls (create corridors)
+        // Add walls (create corridors - Mario style platforms)
         const walls = [
             { x: 5, y: 3, w: 1, h: 6 },
             { x: 10, y: 2, w: 1, h: 7 },
@@ -79,7 +80,7 @@ class EmbodiedAISimulation {
             }
         });
 
-        // Place Energy Core (target)
+        // Place Energy Core (target) - Princess/Goal
         map[8][13] = 2;
 
         // Place Control Terminal (secondary target)
@@ -491,6 +492,14 @@ Respond in JSON format ONLY, no extra text:
         this.stepCount++;
         const perception = this.getPerceptionState();
         const decision = await this.fetchNextAction(perception);
+        
+        // Update direction based on movement
+        if (decision.target_x > this.agent.x) {
+            this.agent.direction = 1; // Moving right
+        } else if (decision.target_x < this.agent.x) {
+            this.agent.direction = -1; // Moving left
+        }
+        
         await this.executeAction(decision);
 
         this.updateStats();
@@ -498,8 +507,8 @@ Respond in JSON format ONLY, no extra text:
 
     /* ==================== RENDERING ==================== */
     render(deltaTime) {
-        // Clear canvas
-        this.ctx.fillStyle = '#0a0e27';
+        // Clear canvas - Mario sky blue
+        this.ctx.fillStyle = '#5c94fc';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
         // Draw grid tiles
@@ -509,10 +518,7 @@ Respond in JSON format ONLY, no extra text:
         this.updateAgentMovement(deltaTime);
 
         // Draw agent
-        this.drawAgent();
-
-        // Draw grid lines
-        this.drawGridLines();
+        this.drawStickman();
 
         // Update FPS counter
         this.updateFPS(deltaTime);
@@ -520,10 +526,10 @@ Respond in JSON format ONLY, no extra text:
 
     drawGridTiles() {
         const colors = {
-            0: '#1a2544', // Floor
-            1: '#495057', // Wall
-            2: '#ffd700', // Energy Core
-            3: '#00d4ff'  // Terminal
+            0: '#5c94fc', // Sky floor
+            1: '#8b4513', // Brown wood blocks
+            2: '#ffcc00', // Gold coin (Energy Core)
+            3: '#ff0000'  // Red terminal (Lava or flag)
         };
 
         for (let y = 0; y < this.gridHeight; y++) {
@@ -537,94 +543,122 @@ Respond in JSON format ONLY, no extra text:
                 this.ctx.fillRect(px, py, this.tileSize, this.tileSize);
 
                 // Draw special tile effects
-                if (tileType === 2) {
-                    // Energy Core: glowing effect
-                    this.ctx.fillStyle = 'rgba(255, 215, 0, 0.3)';
+                if (tileType === 1) {
+                    // Brick block - draw brick pattern
+                    this.ctx.strokeStyle = '#654321';
+                    this.ctx.lineWidth = 2;
+                    this.ctx.strokeRect(px + 2, py + 2, this.tileSize - 4, this.tileSize - 4);
+                    
+                    // Brick grid
+                    this.ctx.lineWidth = 1;
                     this.ctx.beginPath();
-                    this.ctx.arc(
-                        px + this.tileSize / 2,
-                        py + this.tileSize / 2,
-                        this.tileSize / 2.5,
-                        0,
-                        Math.PI * 2
-                    );
+                    this.ctx.moveTo(px + this.tileSize / 2, py + 2);
+                    this.ctx.lineTo(px + this.tileSize / 2, py + this.tileSize - 2);
+                    this.ctx.stroke();
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(px + 2, py + this.tileSize / 2);
+                    this.ctx.lineTo(px + this.tileSize - 2, py + this.tileSize / 2);
+                    this.ctx.stroke();
+                } else if (tileType === 2) {
+                    // Coin - draw circle with shine
+                    const centerX = px + this.tileSize / 2;
+                    const centerY = py + this.tileSize / 2;
+                    const radius = this.tileSize / 3;
+                    
+                    this.ctx.fillStyle = '#ffcc00';
+                    this.ctx.beginPath();
+                    this.ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+                    this.ctx.fill();
+                    
+                    // Shine effect
+                    this.ctx.fillStyle = '#ffff99';
+                    this.ctx.beginPath();
+                    this.ctx.arc(centerX - radius / 3, centerY - radius / 3, radius / 3, 0, Math.PI * 2);
                     this.ctx.fill();
                 } else if (tileType === 3) {
-                    // Terminal: cyan accent
-                    this.ctx.strokeStyle = '#00ffff';
-                    this.ctx.lineWidth = 2;
-                    this.ctx.strokeRect(px + 3, py + 3, this.tileSize - 6, this.tileSize - 6);
-                } else if (tileType === 1) {
-                    // Wall: darker border
-                    this.ctx.strokeStyle = '#2a3f54';
-                    this.ctx.lineWidth = 2;
-                    this.ctx.strokeRect(px, py, this.tileSize, this.tileSize);
+                    // Flag/Lava - draw triangle flag
+                    const centerX = px + this.tileSize / 2;
+                    const centerY = py + this.tileSize / 2;
+                    const size = this.tileSize / 2.5;
+                    
+                    this.ctx.fillStyle = '#ff0000';
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(centerX, centerY - size);
+                    this.ctx.lineTo(centerX + size, centerY);
+                    this.ctx.lineTo(centerX, centerY + size);
+                    this.ctx.closePath();
+                    this.ctx.fill();
                 }
             }
         }
     }
 
-    drawAgent() {
+    drawStickman() {
         const px = this.agent.renderX * this.tileSize + this.tileSize / 2;
         const py = this.agent.renderY * this.tileSize + this.tileSize / 2;
-        const radius = this.tileSize / 3;
+        const scale = this.tileSize / 40;
 
-        // Pulsing aura
-        const pulsePhase = (Date.now() % 1000) / 1000;
-        const auraRadius = radius + Math.sin(pulsePhase * Math.PI * 2) * (radius * 0.3);
-
-        this.ctx.fillStyle = `rgba(0, 212, 255, ${0.3 + pulsePhase * 0.2})`;
-        this.ctx.beginPath();
-        this.ctx.arc(px, py, auraRadius, 0, Math.PI * 2);
-        this.ctx.fill();
-
-        // Main agent circle
-        this.ctx.fillStyle = '#00d4ff';
-        this.ctx.beginPath();
-        this.ctx.arc(px, py, radius, 0, Math.PI * 2);
-        this.ctx.fill();
-
-        // Direction indicator
-        this.ctx.strokeStyle = '#00ffff';
+        this.ctx.strokeStyle = '#000000';
+        this.ctx.fillStyle = '#000000';
         this.ctx.lineWidth = 2;
+        this.ctx.lineCap = 'round';
+        this.ctx.lineJoin = 'round';
+
+        // Head
+        const headRadius = 5 * scale;
         this.ctx.beginPath();
-        this.ctx.arc(px, py, radius * 0.6, 0, Math.PI * 2);
+        this.ctx.arc(px, py - 12 * scale, headRadius, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        // Eyes
+        const eyeOffset = 2 * scale;
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.beginPath();
+        this.ctx.arc(px - eyeOffset, py - 13 * scale, 1.5 * scale, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.beginPath();
+        this.ctx.arc(px + eyeOffset, py - 13 * scale, 1.5 * scale, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        // Pupils
+        const pupilDir = this.agent.direction; // Face direction
+        this.ctx.fillStyle = '#000000';
+        this.ctx.beginPath();
+        this.ctx.arc(px - eyeOffset + (pupilDir * 0.5 * scale), py - 13 * scale, 0.8 * scale, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.beginPath();
+        this.ctx.arc(px + eyeOffset + (pupilDir * 0.5 * scale), py - 13 * scale, 0.8 * scale, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        // Body
+        this.ctx.beginPath();
+        this.ctx.moveTo(px, py - 6 * scale);
+        this.ctx.lineTo(px, py + 3 * scale);
         this.ctx.stroke();
 
-        // Direction arrow (facing towards target if moving)
-        if (this.agent.targetX !== null) {
-            const angle = Math.atan2(
-                this.agent.targetY - this.agent.renderY,
-                this.agent.targetX - this.agent.renderX
-            );
-            const arrowLen = radius * 0.5;
-            this.ctx.beginPath();
-            this.ctx.moveTo(px, py);
-            this.ctx.lineTo(
-                px + Math.cos(angle) * arrowLen,
-                py + Math.sin(angle) * arrowLen
-            );
-            this.ctx.stroke();
-        }
-    }
+        // Left Arm
+        this.ctx.beginPath();
+        this.ctx.moveTo(px, py - 2 * scale);
+        this.ctx.lineTo(px - 8 * scale * this.agent.direction, py + 1 * scale);
+        this.ctx.stroke();
 
-    drawGridLines() {
-        this.ctx.strokeStyle = 'rgba(0, 212, 255, 0.1)';
-        this.ctx.lineWidth = 0.5;
+        // Right Arm
+        this.ctx.beginPath();
+        this.ctx.moveTo(px, py - 2 * scale);
+        this.ctx.lineTo(px + 8 * scale * this.agent.direction, py + 1 * scale);
+        this.ctx.stroke();
 
-        for (let x = 0; x <= this.gridWidth; x++) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(x * this.tileSize, 0);
-            this.ctx.lineTo(x * this.tileSize, this.canvas.height);
-            this.ctx.stroke();
-        }
+        // Left Leg
+        this.ctx.beginPath();
+        this.ctx.moveTo(px, py + 3 * scale);
+        this.ctx.lineTo(px - 5 * scale, py + 10 * scale);
+        this.ctx.stroke();
 
-        for (let y = 0; y <= this.gridHeight; y++) {
-            this.ctx.beginPath();
-            this.ctx.moveTo(0, y * this.tileSize);
-            this.ctx.lineTo(this.canvas.width, y * this.tileSize);
-            this.ctx.stroke();
-        }
+        // Right Leg
+        this.ctx.beginPath();
+        this.ctx.moveTo(px, py + 3 * scale);
+        this.ctx.lineTo(px + 5 * scale, py + 10 * scale);
+        this.ctx.stroke();
     }
 
     updateAgentMovement(deltaTime) {
@@ -680,7 +714,7 @@ Respond in JSON format ONLY, no extra text:
     checkGoalReached() {
         const targetType = this.targetType === 'energy' ? 2 : 3;
         if (this.mapData[this.agent.y]?.[this.agent.x] === targetType) {
-            this.addLogEntry('action', `✅ GOAL REACHED! ${this.targetType === 'energy' ? 'Energy Core' : 'Terminal'} acquired!`);
+            this.addLogEntry('action', `✅ GOAL REACHED! ${this.targetType === 'energy' ? 'Coin' : 'Flag'} acquired!`);
             this.setStatus('idle');
         }
     }
@@ -763,8 +797,8 @@ Respond in JSON format ONLY, no extra text:
         // Target selection
         document.getElementById('targetTile').addEventListener('change', (e) => {
             this.targetType = e.target.value;
-            const name = this.targetType === 'energy' ? 'Energy Core' : 'Control Terminal';
-            document.getElementById('goalDisplay').textContent = `Goal: Navigate to the ${name}`;
+            const name = this.targetType === 'energy' ? 'Collect the Coin' : 'Reach the Flag';
+            document.getElementById('goalDisplay').textContent = `Goal: ${name}`;
             this.addLogEntry('system', `[SYSTEM] Target changed to: ${name}`);
         });
 
@@ -807,7 +841,8 @@ Respond in JSON format ONLY, no extra text:
             moveProgress: 0,
             moveDuration: 300,
             failedAttempts: 0,
-            lastFailedPos: null
+            lastFailedPos: null,
+            direction: 1
         };
         this.stepCount = 0;
         this.isAutoRunning = false;
@@ -838,5 +873,5 @@ Respond in JSON format ONLY, no extra text:
 /* ==================== INITIALIZATION ==================== */
 document.addEventListener('DOMContentLoaded', () => {
     window.simulation = new EmbodiedAISimulation();
-    console.log('🤖 Embodied AI Agent Simulation initialized');
+    console.log('🤖 Mario-style AI Agent Simulation initialized');
 });
