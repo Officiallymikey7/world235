@@ -1,8 +1,42 @@
 # 🤖 Embodied AI Agent Simulation
 
-A production-ready, browser-based AI agent simulation built with vanilla HTML5 Canvas, CSS, and JavaScript. Deploy directly to GitHub Pages with zero dependencies.
+A production-ready, browser-based AI agent simulation using Pixi.js + GPU tile rendering with an AI decision loop and side-scrolling gameplay.
 
 **Live Demo:** [https://Officiallymikey7.github.io/world235/](https://Officiallymikey7.github.io/world235/)
+
+## 🧩 Rendering Migration (GPU Tile Stack)
+
+- Primary renderer migrated to **Pixi.js** with **`@pixi/tilemap`** batching.
+- Rendering is now separated from gameplay state updates:
+  - `update(deltaTime)` handles physics/game state.
+  - `GPURenderer.render()` handles all draw operations.
+- World tiles are chunked into **16x16 tiles** and grouped into chunk buckets for viewport culling and activation.
+- Layer model includes:
+  - `terrain` (collision tiles),
+  - `decor` (animated/emissive tiles),
+  - metadata (`collision`, `lightBlock`, `emissive`, `lightRadius`).
+- Dynamic entities (player, enemies, coins, goal) are rendered as sprites on top of tile layers.
+- Lighting pipeline includes:
+  - light map pass,
+  - occlusion shadow pass,
+  - blend pass (`MULTIPLY`) with configurable quality (`low` / `medium` / `high`).
+- Runtime instrumentation now tracks:
+  - FPS,
+  - active chunks,
+  - estimated draw-call budget,
+  - frame-time buckets (`<16ms`, `16-33ms`, `>33ms`).
+- Acceptance targets are defined in code:
+  - target FPS: `60`,
+  - minimum acceptable FPS: `54`,
+  - max draw-call budget: `400`.
+
+### Runtime quality control
+
+From browser console:
+
+```js
+window.game.renderer.setLightingQuality('low');    // or 'medium' / 'high'
+```
 
 ---
 
@@ -628,7 +662,7 @@ sim.runStep = async function() {
 world235/
 ├── index.html          (Semantic HTML with UI structure)
 ├── style.css           (Dark sci-fi styling, 1000+ lines)
-├── app.js              (Main simulation engine, 700+ lines)
+├── app.js              (Game logic + decoupled Pixi tile/sprite renderer)
 ├── README.md           (This file)
 └── LICENSE             (Optional)
 ```
@@ -708,4 +742,4 @@ Potential improvements:
 ---
 
 *Last updated: 2026-07-26*
-*Version: 1.0.0*
+*Version: 2.0.0*

@@ -1,26 +1,534 @@
-/* ==================== 2D SIDE-SCROLLING PLATFORMER WITH AI ==================== */
-/* Production-ready vanilla JavaScript platformer game */
+/* ==================== GPU TILE PLATFORMER WITH AI ==================== */
+
+class GPURenderer {
+    constructor(game) {
+        this.game = game;
+        this.tileSize = game.tileSize;
+        this.chunkSize = game.chunkSize;
+
+        this.app = null;
+        this.worldContainer = null;
+        this.tileContainer = null;
+        this.dynamicContainer = null;
+
+        this.terrainTilemap = null;
+        this.decorTilemap = null;
+
+        this.textures = {};
+        this.animatedTerrainFrames = [];
+        this.animatedDecorFrames = [];
+
+        this.playerSprite = null;
+        this.goalSprite = null;
+        this.enemySprites = [];
+        this.coinSprites = [];
+
+        this.activeChunkKeys = new Set();
+
+        this.lighting = {
+            quality: 'medium',
+            resolutionScale: 0.5,
+            canvas: null,
+            ctx: null,
+            texture: null,
+            sprite: null
+        };
+
+        this.metrics = {
+            drawCalls: 0,
+            activeChunks: 0
+        };
+    }
+
+    async initialize() {
+        if (!window.PIXI) {
+            throw new Error('PIXI is not available.');
+        }
+
+        const canvas = this.game.canvas;
+
+        this.app = new PIXI.Application({
+            view: canvas,
+            width: canvas.width,
+            height: canvas.height,
+            antialias: false,
+            backgroundColor: 0x0a0e27,
+            autoDensity: true,
+            resolution: window.devicePixelRatio || 1,
+            powerPreference: 'high-performance'
+        });
+
+        this.worldContainer = new PIXI.Container();
+        this.tileContainer = new PIXI.Container();
+        this.dynamicContainer = new PIXI.Container();
+
+        this.worldContainer.addChild(this.tileContainer);
+        this.worldContainer.addChild(this.dynamicContainer);
+        this.app.stage.addChild(this.worldContainer);
+
+        this.createTilemaps();
+        this.createTextures();
+        this.createDynamicSprites();
+        this.initializeLighting();
+    }
+
+    createTilemaps() {
+        const TilemapClass = window.PIXI?.tilemap?.CompositeTilemap;
+        if (TilemapClass) {
+            this.terrainTilemap = new TilemapClass();
+            this.decorTilemap = new TilemapClass();
+        } else {
+            this.terrainTilemap = new PIXI.Container();
+            this.decorTilemap = new PIXI.Container();
+        }
+
+        this.tileContainer.addChild(this.terrainTilemap);
+        this.tileContainer.addChild(this.decorTilemap);
+    }
+
+    createTextures() {
+        this.textures.sky = this.createSolidTexture(0x87ceeb, this.tileSize, this.tileSize);
+        this.textures.ground = this.createSolidTexture(0x8b4513, this.tileSize, this.tileSize);
+        this.textures.platform = this.createSolidTexture(0x7a3f14, this.tileSize, this.tileSize);
+        this.textures.pole = this.createSolidTexture(0x5a3412, this.tileSize, this.tileSize);
+        this.textures.decor = this.createSolidTexture(0x00d4ff, this.tileSize, this.tileSize);
+        this.textures.lightBlock = this.createSolidTexture(0x333333, this.tileSize, this.tileSize);
+
+        this.animatedTerrainFrames = [
+            this.createSolidTexture(0x6a3816, this.tileSize, this.tileSize),
+            this.createSolidTexture(0x844216, this.tileSize, this.tileSize),
+            this.createSolidTexture(0x6f3a19, this.tileSize, this.tileSize)
+        ];
+
+        this.animatedDecorFrames = [
+            this.createSolidTexture(0x1fe8ff, this.tileSize, this.tileSize),
+            this.createSolidTexture(0x00c2e6, this.tileSize, this.tileSize),
+            this.createSolidTexture(0x00ffff, this.tileSize, this.tileSize)
+        ];
+
+        this.textures.player = this.createCircleTexture(0x00d4ff, 10);
+        this.textures.enemy = this.createCircleTexture(0x8b4513, 12);
+        this.textures.coin = this.createCircleTexture(0xffcc00, 6);
+        this.textures.goal = this.createFlagTexture();
+    }
+
+    createSolidTexture(color, width, height) {
+        const g = new PIXI.Graphics();
+        g.beginFill(color);
+        g.drawRect(0, 0, width, height);
+        g.endFill();
+        return this.app.renderer.generateTexture(g);
+    }
+
+    createCircleTexture(color, radius) {
+        const g = new PIXI.Graphics();
+        g.beginFill(color);
+        g.drawCircle(radius, radius, radius);
+        g.endFill();
+        return this.app.renderer.generateTexture(g);
+    }
+
+    createFlagTexture() {
+        const g = new PIXI.Graphics();
+        g.beginFill(0x654321);
+        g.drawRect(14, 4, 4, 28);
+        g.endFill();
+        g.beginFill(0xff0000);
+        g.moveTo(18, 4);
+        g.lineTo(32, 10);
+        g.lineTo(18, 16);
+        g.lineTo(18, 4);
+        g.endFill();
+        return this.app.renderer.generateTexture(g);
+    }
+
+    createDynamicSprites() {
+        this.playerSprite = new PIXI.Sprite(this.textures.player);
+        this.playerSprite.anchor.set(0.5, 1);
+        this.dynamicContainer.addChild(this.playerSprite);
+
+        this.goalSprite = new PIXI.Sprite(this.textures.goal);
+        this.goalSprite.anchor.set(0.5, 1);
+        this.dynamicContainer.addChild(this.goalSprite);
+    }
+
+    initializeLighting() {
+        this.setLightingQuality(this.lighting.quality);
+    }
+
+    setLightingQuality(quality) {
+        this.lighting.quality = quality;
+        this.lighting.resolutionScale = quality === 'high' ? 1 : quality === 'low' ? 0.25 : 0.5;
+
+        const width = Math.max(64, Math.floor(this.game.canvas.width * this.lighting.resolutionScale));
+        const height = Math.max(64, Math.floor(this.game.canvas.height * this.lighting.resolutionScale));
+
+        this.lighting.canvas = document.createElement('canvas');
+        this.lighting.canvas.width = width;
+        this.lighting.canvas.height = height;
+        this.lighting.ctx = this.lighting.canvas.getContext('2d');
+
+        if (this.lighting.texture) {
+            this.lighting.texture.destroy(true);
+        }
+        this.lighting.texture = PIXI.Texture.from(this.lighting.canvas);
+
+        if (!this.lighting.sprite) {
+            this.lighting.sprite = new PIXI.Sprite(this.lighting.texture);
+            this.lighting.sprite.blendMode = PIXI.BLEND_MODES.MULTIPLY;
+            this.lighting.sprite.zIndex = 9999;
+            this.app.stage.addChild(this.lighting.sprite);
+        } else {
+            this.lighting.sprite.texture = this.lighting.texture;
+        }
+
+        this.lighting.sprite.width = this.game.canvas.width;
+        this.lighting.sprite.height = this.game.canvas.height;
+    }
+
+    updateVisibleChunks() {
+        const visibleChunkKeys = this.game.world.getVisibleChunkKeys(this.game.cameraX, this.game.cameraY, this.game.canvas.width, this.game.canvas.height);
+        const next = new Set(visibleChunkKeys);
+
+        const changed = next.size !== this.activeChunkKeys.size || [...next].some(k => !this.activeChunkKeys.has(k));
+        if (!changed) {
+            this.metrics.activeChunks = next.size;
+            return;
+        }
+
+        this.activeChunkKeys = next;
+        this.metrics.activeChunks = next.size;
+
+        this.rebuildTilemapLayers();
+    }
+
+    rebuildTilemapLayers() {
+        if (this.terrainTilemap.clear) this.terrainTilemap.clear();
+        if (this.decorTilemap.clear) this.decorTilemap.clear();
+
+        this.clearContainerIfNeeded(this.terrainTilemap);
+        this.clearContainerIfNeeded(this.decorTilemap);
+
+        const terrainFrame = this.animatedTerrainFrames[this.game.animationState.frameIndex];
+        const decorFrame = this.animatedDecorFrames[this.game.animationState.frameIndex];
+
+        for (const key of this.activeChunkKeys) {
+            const chunk = this.game.world.chunks.get(key);
+            if (!chunk) continue;
+
+            for (const tile of chunk.tiles) {
+                const worldX = tile.x * this.tileSize;
+                const worldY = tile.y * this.tileSize;
+
+                if (tile.layer === 'terrain') {
+                    const tex = tile.animated ? terrainFrame : this.resolveTileTexture(tile.type);
+                    this.addTile(this.terrainTilemap, tex, worldX, worldY);
+                } else if (tile.layer === 'decor') {
+                    const tex = tile.animated ? decorFrame : this.textures.decor;
+                    this.addTile(this.decorTilemap, tex, worldX, worldY);
+                }
+            }
+        }
+    }
+
+    clearContainerIfNeeded(target) {
+        if (!target || target.clear) return;
+        if (target.removeChildren) {
+            target.removeChildren().forEach(child => child.destroy?.());
+        }
+    }
+
+    resolveTileTexture(type) {
+        switch (type) {
+            case 'ground': return this.textures.ground;
+            case 'platform': return this.textures.platform;
+            case 'pole': return this.textures.pole;
+            case 'lightBlock': return this.textures.lightBlock;
+            default: return this.textures.platform;
+        }
+    }
+
+    addTile(target, texture, x, y) {
+        if (target.tile) {
+            target.tile(texture, x, y);
+            return;
+        }
+
+        const sprite = new PIXI.Sprite(texture);
+        sprite.x = x;
+        sprite.y = y;
+        sprite.width = this.tileSize;
+        sprite.height = this.tileSize;
+        target.addChild(sprite);
+    }
+
+    syncDynamicEntities() {
+        const { player, levelGoal, enemies, coins } = this.game;
+
+        this.playerSprite.x = player.x + player.width / 2;
+        this.playerSprite.y = player.y + player.height;
+        this.playerSprite.scale.x = player.direction >= 0 ? 1 : -1;
+
+        this.goalSprite.x = levelGoal.x + levelGoal.width / 2;
+        this.goalSprite.y = levelGoal.y + levelGoal.height;
+        this.goalSprite.visible = !levelGoal.collected;
+
+        while (this.enemySprites.length < enemies.length) {
+            const sprite = new PIXI.Sprite(this.textures.enemy);
+            sprite.anchor.set(0.5, 1);
+            this.enemySprites.push(sprite);
+            this.dynamicContainer.addChild(sprite);
+        }
+
+        while (this.coinSprites.length < coins.length) {
+            const sprite = new PIXI.Sprite(this.textures.coin);
+            sprite.anchor.set(0.5, 0.5);
+            this.coinSprites.push(sprite);
+            this.dynamicContainer.addChild(sprite);
+        }
+
+        for (let i = 0; i < this.enemySprites.length; i++) {
+            const sprite = this.enemySprites[i];
+            const enemy = enemies[i];
+            if (!enemy) {
+                sprite.visible = false;
+                continue;
+            }
+            sprite.visible = !enemy.defeated;
+            sprite.x = enemy.x;
+            sprite.y = enemy.y + enemy.height / 2;
+            sprite.scale.x = enemy.velocityX >= 0 ? 1 : -1;
+        }
+
+        for (let i = 0; i < this.coinSprites.length; i++) {
+            const sprite = this.coinSprites[i];
+            const coin = coins[i];
+            if (!coin) {
+                sprite.visible = false;
+                continue;
+            }
+            sprite.visible = !coin.collected;
+            sprite.x = coin.x;
+            sprite.y = coin.y;
+        }
+    }
+
+    updateCamera() {
+        this.worldContainer.x = -this.game.cameraX;
+        this.worldContainer.y = -this.game.cameraY;
+    }
+
+    updateLighting() {
+        const { canvas, ctx } = this.lighting;
+        if (!canvas || !ctx) return;
+
+        const scaleX = canvas.width / this.game.canvas.width;
+        const scaleY = canvas.height / this.game.canvas.height;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#101820';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const lights = this.game.world.getVisibleLights(this.game.cameraX, this.game.cameraY, this.game.canvas.width, this.game.canvas.height);
+
+        const playerLightX = (this.game.player.x + this.game.player.width / 2 - this.game.cameraX) * scaleX;
+        const playerLightY = (this.game.player.y + this.game.player.height / 2 - this.game.cameraY) * scaleY;
+        this.cutRadialLight(ctx, playerLightX, playerLightY, 140 * scaleX, 0.75);
+
+        for (const light of lights) {
+            const lx = (light.x * this.tileSize + this.tileSize / 2 - this.game.cameraX) * scaleX;
+            const ly = (light.y * this.tileSize + this.tileSize / 2 - this.game.cameraY) * scaleY;
+            this.cutRadialLight(ctx, lx, ly, light.radius * scaleX, 0.9);
+        }
+
+        this.drawOcclusionShadows(ctx, scaleX, scaleY);
+        this.lighting.texture.update();
+    }
+
+    cutRadialLight(ctx, x, y, radius, strength) {
+        const gradient = ctx.createRadialGradient(x, y, radius * 0.1, x, y, radius);
+        gradient.addColorStop(0, `rgba(255,255,255,${strength})`);
+        gradient.addColorStop(1, 'rgba(255,255,255,0)');
+
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalCompositeOperation = 'source-over';
+    }
+
+    drawOcclusionShadows(ctx, scaleX, scaleY) {
+        const blockers = this.game.world.getVisibleLightBlockers(this.game.cameraX, this.game.cameraY, this.game.canvas.width, this.game.canvas.height);
+        const sourceX = (this.game.player.x + this.game.player.width / 2 - this.game.cameraX) * scaleX;
+        const sourceY = (this.game.player.y + this.game.player.height / 2 - this.game.cameraY) * scaleY;
+
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.32)';
+
+        for (const blocker of blockers) {
+            const bx = (blocker.x * this.tileSize - this.game.cameraX) * scaleX;
+            const by = (blocker.y * this.tileSize - this.game.cameraY) * scaleY;
+            const bw = this.tileSize * scaleX;
+            const bh = this.tileSize * scaleY;
+
+            const centerX = bx + bw / 2;
+            const centerY = by + bh / 2;
+
+            const dx = centerX - sourceX;
+            const dy = centerY - sourceY;
+            const mag = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+            const ux = dx / mag;
+            const uy = dy / mag;
+
+            const shadowLength = (this.lighting.quality === 'low' ? 40 : this.lighting.quality === 'high' ? 90 : 65) * scaleX;
+
+            ctx.beginPath();
+            ctx.rect(bx + ux * 2, by + uy * 2, bw, bh);
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.moveTo(bx, by);
+            ctx.lineTo(bx + bw, by);
+            ctx.lineTo(bx + bw + ux * shadowLength, by + uy * shadowLength);
+            ctx.lineTo(bx + ux * shadowLength, by + uy * shadowLength);
+            ctx.closePath();
+            ctx.fill();
+        }
+    }
+
+    render() {
+        if (!this.app) return;
+
+        this.updateVisibleChunks();
+        this.syncDynamicEntities();
+        this.updateCamera();
+        this.updateLighting();
+
+        const dynamicCount = 2 + this.game.enemies.filter(e => !e.defeated).length + this.game.coins.filter(c => !c.collected).length;
+        this.metrics.drawCalls = 2 + dynamicCount + 1;
+
+        this.app.render();
+    }
+
+    destroy() {
+        if (this.app) {
+            this.app.destroy(true, { children: true, texture: true, baseTexture: true });
+        }
+    }
+}
+
+class ChunkedTileWorld {
+    constructor(tileSize, chunkSize) {
+        this.tileSize = tileSize;
+        this.chunkSize = chunkSize;
+        this.chunks = new Map();
+    }
+
+    reset() {
+        this.chunks.clear();
+    }
+
+    chunkKey(cx, cy) {
+        return `${cx},${cy}`;
+    }
+
+    addTile(tile) {
+        const cx = Math.floor(tile.x / this.chunkSize);
+        const cy = Math.floor(tile.y / this.chunkSize);
+        const key = this.chunkKey(cx, cy);
+        if (!this.chunks.has(key)) {
+            this.chunks.set(key, {
+                cx,
+                cy,
+                tiles: [],
+                lights: [],
+                lightBlockers: []
+            });
+        }
+
+        const chunk = this.chunks.get(key);
+        chunk.tiles.push(tile);
+
+        if (tile.emissive) {
+            chunk.lights.push({ x: tile.x, y: tile.y, radius: tile.lightRadius || 90 });
+        }
+
+        if (tile.lightBlock) {
+            chunk.lightBlockers.push({ x: tile.x, y: tile.y });
+        }
+    }
+
+    addTiles(tiles) {
+        for (const tile of tiles) {
+            this.addTile(tile);
+        }
+    }
+
+    getVisibleChunkKeys(cameraX, cameraY, viewportWidth, viewportHeight) {
+        const minTileX = Math.floor(cameraX / this.tileSize);
+        const minTileY = Math.floor(cameraY / this.tileSize);
+        const maxTileX = Math.floor((cameraX + viewportWidth) / this.tileSize);
+        const maxTileY = Math.floor((cameraY + viewportHeight) / this.tileSize);
+
+        const minChunkX = Math.floor(minTileX / this.chunkSize) - 1;
+        const minChunkY = Math.floor(minTileY / this.chunkSize) - 1;
+        const maxChunkX = Math.floor(maxTileX / this.chunkSize) + 1;
+        const maxChunkY = Math.floor(maxTileY / this.chunkSize) + 1;
+
+        const keys = [];
+        for (let cy = minChunkY; cy <= maxChunkY; cy++) {
+            for (let cx = minChunkX; cx <= maxChunkX; cx++) {
+                const key = this.chunkKey(cx, cy);
+                if (this.chunks.has(key)) keys.push(key);
+            }
+        }
+        return keys;
+    }
+
+    getVisibleLights(cameraX, cameraY, viewportWidth, viewportHeight) {
+        const keys = this.getVisibleChunkKeys(cameraX, cameraY, viewportWidth, viewportHeight);
+        const lights = [];
+        for (const key of keys) {
+            const chunk = this.chunks.get(key);
+            if (chunk) lights.push(...chunk.lights);
+        }
+        return lights;
+    }
+
+    getVisibleLightBlockers(cameraX, cameraY, viewportWidth, viewportHeight) {
+        const keys = this.getVisibleChunkKeys(cameraX, cameraY, viewportWidth, viewportHeight);
+        const blockers = [];
+        for (const key of keys) {
+            const chunk = this.chunks.get(key);
+            if (chunk) blockers.push(...chunk.lightBlockers);
+        }
+        return blockers;
+    }
+}
 
 class PlatformerGame {
     constructor() {
-        // Canvas & Rendering
+        // Canvas & Camera
         this.canvas = document.getElementById('gridCanvas');
-        this.ctx = this.canvas.getContext('2d');
         this.cameraX = 0;
         this.cameraY = 0;
-        
+
         // World Properties
         this.worldWidth = 3000;
         this.worldHeight = this.canvas.height;
         this.gravity = 0.6;
         this.groundLevel = this.canvas.height - 100;
-        
+
+        this.tileSize = 16;
+        this.chunkSize = 32;
+        this.world = new ChunkedTileWorld(this.tileSize, this.chunkSize);
+
         // Game Objects
         this.platforms = [];
         this.enemies = [];
         this.coins = [];
         this.levelGoal = null;
-        
+
         // Player/Agent
         this.player = {
             x: 100,
@@ -31,7 +539,7 @@ class PlatformerGame {
             velocityY: 0,
             jumping: false,
             canJump: true,
-            direction: 1, // 1 for right, -1 for left
+            direction: 1,
             maxSpeed: 6,
             jumpPower: 12,
             onPlatform: null,
@@ -45,23 +553,52 @@ class PlatformerGame {
         this.coinsCollected = 0;
         this.currentLevel = 1;
 
-        // Rendering
+        // Timing & Metrics
         this.lastFrameTime = Date.now();
         this.frameCount = 0;
         this.fps = 60;
+        this.animationState = {
+            elapsed: 0,
+            frameIndex: 0,
+            frameInterval: 140
+        };
+        this.performance = {
+            drawCalls: 0,
+            frameBuckets: {
+                under16ms: 0,
+                between16And33ms: 0,
+                over33ms: 0
+            },
+            acceptanceTargets: {
+                targetFPS: 60,
+                minAcceptableFPS: 54,
+                maxDrawCalls: 400
+            }
+        };
 
         // API Configuration
         this.apiKey = this.loadAPIKey();
         this.apiProvider = this.loadAPIProvider();
 
+        // Renderer Boundary
+        this.renderer = new GPURenderer(this);
+
         // Initialize
         this.initializeLevel();
         this.initializeEventListeners();
         this.loadUIState();
-        this.addLogEntry('system', '[SYSTEM] Platformer game initialized. Ready to play!');
-        
-        // Start render loop
-        this.startRenderLoop();
+        this.addLogEntry('system', '[SYSTEM] GPU tile renderer initialized.');
+
+        this.bootstrapRenderer().then(() => {
+            this.startGameLoop();
+        }).catch((error) => {
+            this.setStatus('error');
+            this.addLogEntry('error', `[ERROR] ${error.message}`);
+        });
+    }
+
+    async bootstrapRenderer() {
+        await this.renderer.initialize();
     }
 
     /* ==================== LEVEL GENERATION ==================== */
@@ -71,24 +608,16 @@ class PlatformerGame {
         this.coins = [];
         this.coinsCollected = 0;
 
-        // Ground platform
-        this.platforms.push({
-            x: 0,
-            y: this.groundLevel,
-            width: this.worldWidth,
-            height: 100,
-            type: 'ground'
-        });
+        this.platforms.push({ x: 0, y: this.groundLevel, width: this.worldWidth, height: 100, type: 'ground' });
 
         if (this.currentLevel === 1) {
             this.createLevel1();
         } else if (this.currentLevel === 2) {
             this.createLevel2();
         } else {
-            this.createLevel1(); // Default to level 1
+            this.createLevel1();
         }
 
-        // Level goal (flag)
         this.levelGoal = {
             x: this.worldWidth - 150,
             y: this.groundLevel - 50,
@@ -96,38 +625,24 @@ class PlatformerGame {
             height: 50,
             collected: false
         };
+
+        this.rebuildTileWorld();
     }
 
     createLevel1() {
-        // Starting platform
         this.platforms.push({ x: 50, y: this.groundLevel - 40, width: 200, height: 20, type: 'platform' });
-
-        // Jump sequence
         this.platforms.push({ x: 300, y: this.groundLevel - 80, width: 150, height: 20, type: 'platform' });
         this.platforms.push({ x: 500, y: this.groundLevel - 120, width: 150, height: 20, type: 'platform' });
         this.platforms.push({ x: 700, y: this.groundLevel - 80, width: 150, height: 20, type: 'platform' });
-
-        // Gap to jump
         this.platforms.push({ x: 950, y: this.groundLevel - 60, width: 200, height: 20, type: 'platform' });
-
-        // High jump
         this.platforms.push({ x: 1250, y: this.groundLevel - 150, width: 150, height: 20, type: 'platform' });
-
-        // Moving platform section
         this.platforms.push({ x: 1500, y: this.groundLevel - 100, width: 100, height: 20, type: 'moving' });
         this.platforms.push({ x: 1700, y: this.groundLevel - 80, width: 150, height: 20, type: 'platform' });
-
-        // Pole section
         this.platforms.push({ x: 1950, y: this.groundLevel - 200, width: 30, height: 200, type: 'pole' });
         this.platforms.push({ x: 2100, y: this.groundLevel - 80, width: 150, height: 20, type: 'platform' });
-
-        // Enemy section
         this.platforms.push({ x: 2350, y: this.groundLevel - 60, width: 200, height: 20, type: 'platform' });
-
-        // Final platform
         this.platforms.push({ x: 2700, y: this.groundLevel - 60, width: 200, height: 20, type: 'platform' });
 
-        // Coins
         this.coins.push({ x: 350, y: this.groundLevel - 120, collected: false });
         this.coins.push({ x: 600, y: this.groundLevel - 160, collected: false });
         this.coins.push({ x: 850, y: this.groundLevel - 100, collected: false });
@@ -137,16 +652,13 @@ class PlatformerGame {
         this.coins.push({ x: 2150, y: this.groundLevel - 120, collected: false });
         this.coins.push({ x: 2450, y: this.groundLevel - 100, collected: false });
 
-        // Enemies (Goombas style)
         this.enemies.push({ x: 1000, y: this.groundLevel - 40, width: 30, height: 30, velocityX: -2, defeated: false });
         this.enemies.push({ x: 2400, y: this.groundLevel - 40, width: 30, height: 30, velocityX: 2, defeated: false });
     }
 
     createLevel2() {
-        // More challenging level
         this.platforms.push({ x: 50, y: this.groundLevel - 40, width: 200, height: 20, type: 'platform' });
 
-        // Rapid jumps
         for (let i = 0; i < 5; i++) {
             this.platforms.push({
                 x: 300 + (i * 180),
@@ -157,32 +669,99 @@ class PlatformerGame {
             });
         }
 
-        // Large gap
         this.platforms.push({ x: 1350, y: this.groundLevel - 100, width: 150, height: 20, type: 'platform' });
-
-        // Pole climb
         this.platforms.push({ x: 1650, y: this.groundLevel - 250, width: 30, height: 250, type: 'pole' });
         this.platforms.push({ x: 1850, y: this.groundLevel - 180, width: 150, height: 20, type: 'platform' });
-
-        // Multiple enemies
         this.platforms.push({ x: 2150, y: this.groundLevel - 60, width: 300, height: 20, type: 'platform' });
         this.platforms.push({ x: 2550, y: this.groundLevel - 80, width: 150, height: 20, type: 'platform' });
 
-        // Coins
         for (let i = 0; i < 12; i++) {
             this.coins.push({ x: 300 + (i * 150), y: this.groundLevel - 120, collected: false });
         }
 
-        // Multiple enemies
         this.enemies.push({ x: 800, y: this.groundLevel - 40, width: 30, height: 30, velocityX: 2, defeated: false });
         this.enemies.push({ x: 1200, y: this.groundLevel - 40, width: 30, height: 30, velocityX: -2, defeated: false });
         this.enemies.push({ x: 2200, y: this.groundLevel - 40, width: 30, height: 30, velocityX: 2, defeated: false });
         this.enemies.push({ x: 2400, y: this.groundLevel - 40, width: 30, height: 30, velocityX: -2, defeated: false });
     }
 
+    rebuildTileWorld() {
+        this.world.reset();
+
+        const tiles = [];
+        for (const platform of this.platforms) {
+            const tileType = platform.type === 'ground' ? 'ground' : platform.type === 'pole' ? 'pole' : 'platform';
+            const isMoving = platform.type === 'moving';
+            const xStart = Math.floor(platform.x / this.tileSize);
+            const yStart = Math.floor(platform.y / this.tileSize);
+            const widthTiles = Math.max(1, Math.floor(platform.width / this.tileSize));
+            const heightTiles = Math.max(1, Math.floor(platform.height / this.tileSize));
+
+            for (let ty = 0; ty < heightTiles; ty++) {
+                for (let tx = 0; tx < widthTiles; tx++) {
+                    const tileX = xStart + tx;
+                    const tileY = yStart + ty;
+                    tiles.push({
+                        x: tileX,
+                        y: tileY,
+                        layer: 'terrain',
+                        type: tileType,
+                        collision: true,
+                        lightBlock: platform.type !== 'pole',
+                        animated: isMoving
+                    });
+                }
+            }
+
+            if (platform.type === 'pole') {
+                for (let i = 0; i < heightTiles; i += 2) {
+                    tiles.push({
+                        x: xStart,
+                        y: yStart + i,
+                        layer: 'decor',
+                        type: 'decor',
+                        collision: false,
+                        lightBlock: false,
+                        animated: true,
+                        emissive: true,
+                        lightRadius: 70
+                    });
+                }
+            }
+        }
+
+        for (const coin of this.coins) {
+            tiles.push({
+                x: Math.floor(coin.x / this.tileSize),
+                y: Math.floor(coin.y / this.tileSize),
+                layer: 'decor',
+                type: 'decor',
+                collision: false,
+                lightBlock: false,
+                animated: true,
+                emissive: true,
+                lightRadius: 95
+            });
+        }
+
+        tiles.push({
+            x: Math.floor(this.levelGoal.x / this.tileSize),
+            y: Math.floor(this.levelGoal.y / this.tileSize),
+            layer: 'decor',
+            type: 'decor',
+            collision: false,
+            lightBlock: false,
+            animated: true,
+            emissive: true,
+            lightRadius: 120
+        });
+
+        this.world.addTiles(tiles);
+    }
+
     /* ==================== PERCEPTION STATE ==================== */
     getPerceptionState() {
-        const nearbyPlatforms = this.platforms.filter(p => 
+        const nearbyPlatforms = this.platforms.filter(p =>
             Math.abs(p.x - this.player.x) < 800 && Math.abs(p.y - this.player.y) < 600
         );
 
@@ -199,17 +778,8 @@ class PlatformerGame {
             playerVelocity: { x: this.player.velocityX, y: this.player.velocityY },
             canJump: this.player.canJump,
             onPlatform: this.player.onPlatform ? 'yes' : 'no',
-            nearbyPlatforms: nearbyPlatforms.map(p => ({
-                x: p.x,
-                y: p.y,
-                width: p.width,
-                type: p.type
-            })),
-            nearbyEnemies: nearbyEnemies.map(e => ({
-                x: e.x,
-                y: e.y,
-                direction: e.velocityX > 0 ? 'right' : 'left'
-            })),
+            nearbyPlatforms: nearbyPlatforms.map(p => ({ x: p.x, y: p.y, width: p.width, type: p.type })),
+            nearbyEnemies: nearbyEnemies.map(e => ({ x: e.x, y: e.y, direction: e.velocityX > 0 ? 'right' : 'left' })),
             nearbyCoin: nearbyCoin ? { x: nearbyCoin.x, y: nearbyCoin.y } : null,
             goalPosition: { x: this.levelGoal.x, y: this.levelGoal.y },
             coinsCollected: this.coinsCollected,
@@ -234,8 +804,7 @@ class PlatformerGame {
                 response = await this.callOpenAIAPI(prompt);
             }
 
-            const decision = this.parseDecision(response);
-            return decision;
+            return this.parseDecision(response);
         } catch (error) {
             this.setStatus('error');
             this.addLogEntry('error', `[ERROR] API call failed: ${error.message}`);
@@ -276,16 +845,17 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
         });
         if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
         const data = await response.json();
-        return data.candidates[0].content.parts[0].text;
+        return data.candidates?.[0]?.content?.parts?.[0]?.text || '{"thought":"fallback","action":"stand"}';
     }
 
     async callOpenAIAPI(prompt) {
         const url = 'https://api.openai.com/v1/chat/completions';
+        const authHeader = 'Bearer ' + this.apiKey;
         const response = await fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.apiKey}`
+                'Authorization': authHeader
             },
             body: JSON.stringify({
                 model: 'gpt-3.5-turbo',
@@ -296,7 +866,7 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
         });
         if (!response.ok) throw new Error(`OpenAI API error: ${response.status}`);
         const data = await response.json();
-        return data.choices[0].message.content;
+        return data.choices?.[0]?.message?.content || '{"thought":"fallback","action":"stand"}';
     }
 
     parseDecision(responseText) {
@@ -316,7 +886,6 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
         const goalX = perceptionState.goalPosition.x;
         const playerX = perceptionState.playerPosition.x;
 
-        // Prioritize moving toward goal
         if (goalX > playerX + 50) {
             if (perceptionState.canJump) {
                 return { thought: 'Jumping right toward goal', action: 'jump_right' };
@@ -329,7 +898,6 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
             return { thought: 'Moving left toward goal', action: 'move_left' };
         }
 
-        // Collect nearby coins
         if (perceptionState.nearbyCoin) {
             if (perceptionState.nearbyCoin.x > playerX + 20 && perceptionState.canJump) {
                 return { thought: 'Jumping for coin on right', action: 'jump_right' };
@@ -346,7 +914,7 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
         const { thought } = action;
         this.addLogEntry('thought', `💭 ${thought}`);
 
-        switch(action.action) {
+        switch (action.action) {
             case 'jump_left':
                 if (this.player.canJump) {
                     this.player.velocityY = -this.player.jumpPower;
@@ -386,11 +954,12 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
     }
 
     attemptClimb() {
-        // Check if on a pole
         for (const platform of this.platforms) {
-            if (platform.type === 'pole' &&
+            if (
+                platform.type === 'pole' &&
                 this.player.x >= platform.x && this.player.x <= platform.x + platform.width &&
-                this.player.y >= platform.y && this.player.y <= platform.y + platform.height) {
+                this.player.y >= platform.y && this.player.y <= platform.y + platform.height
+            ) {
                 this.player.climbing = true;
                 this.player.velocityY = -5;
                 this.player.canJump = false;
@@ -399,32 +968,34 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
         }
     }
 
-    updatePhysics(deltaTime) {
-        const dt = deltaTime / 1000; // Convert to seconds
+    update(deltaTime) {
+        this.updatePhysics(deltaTime);
+        this.updateCamera();
+        this.updateAnimationState(deltaTime);
+        this.updatePerformanceBuckets(deltaTime);
+    }
 
-        // Apply gravity
+    updatePhysics(deltaTime) {
         if (!this.player.climbing) {
             this.player.velocityY += this.gravity;
         } else {
             this.player.velocityY = 0;
         }
 
-        // Update position
         this.player.x += this.player.velocityX;
         this.player.y += this.player.velocityY;
 
-        // Collision detection with platforms
         this.player.canJump = false;
         this.player.onPlatform = null;
 
         for (const platform of this.platforms) {
-            // Check if player is above platform and falling
-            if (this.player.velocityY >= 0 &&
+            if (
+                this.player.velocityY >= 0 &&
                 this.player.y + this.player.height >= platform.y &&
                 this.player.y + this.player.height <= platform.y + 20 &&
                 this.player.x + this.player.width > platform.x &&
-                this.player.x < platform.x + platform.width) {
-                
+                this.player.x < platform.x + platform.width
+            ) {
                 this.player.y = platform.y - this.player.height;
                 this.player.velocityY = 0;
                 this.player.canJump = true;
@@ -433,7 +1004,6 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
             }
         }
 
-        // Collision with enemies (bounce or defeat)
         for (const enemy of this.enemies) {
             if (!enemy.defeated) {
                 const dx = this.player.x - enemy.x;
@@ -442,19 +1012,16 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
 
                 if (distance < 40) {
                     if (this.player.velocityY > 0 && this.player.y < enemy.y) {
-                        // Jump on enemy
                         enemy.defeated = true;
                         this.player.velocityY = -10;
                         this.addLogEntry('action', '🦗 Enemy defeated!');
                     } else if (this.player.y < 100) {
-                        // Knock back player
                         this.player.velocityX = -this.player.velocityX;
                     }
                 }
             }
         }
 
-        // Collect coins
         for (const coin of this.coins) {
             if (!coin.collected) {
                 const dx = this.player.x - coin.x;
@@ -469,7 +1036,6 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
             }
         }
 
-        // Collect goal
         if (!this.levelGoal.collected) {
             const dx = this.player.x - this.levelGoal.x;
             const dy = this.player.y - this.levelGoal.y;
@@ -482,15 +1048,16 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
             }
         }
 
-        // Update moving platforms
+        let movingChanged = false;
         for (const platform of this.platforms) {
             if (platform.type === 'moving') {
                 platform.x += 2;
                 if (platform.x > this.worldWidth) platform.x = -platform.width;
+                movingChanged = true;
             }
         }
+        if (movingChanged) this.rebuildTileWorld();
 
-        // Update enemies
         for (const enemy of this.enemies) {
             if (!enemy.defeated) {
                 enemy.x += enemy.velocityX;
@@ -500,256 +1067,34 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
             }
         }
 
-        // World bounds
+        this.player.velocityX *= 0.9;
+
         if (this.player.x < 0) this.player.x = 0;
         if (this.player.x > this.worldWidth) this.player.x = this.worldWidth;
         if (this.player.y > this.worldHeight) this.resetLevel();
 
-        // Update camera
-        this.cameraX = Math.max(0, this.player.x - 200);
+        this.updateStats();
     }
 
-    /* ==================== RENDERING ==================== */
-    render(deltaTime) {
-        // Update physics
-        this.updatePhysics(deltaTime);
-
-        // Clear canvas
-        this.ctx.fillStyle = '#87ceeb'; // Sky blue
-        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
-        // Draw distant background
-        this.ctx.fillStyle = '#e0f6ff';
-        this.ctx.fillRect(0, this.canvas.height * 0.7, this.canvas.width, this.canvas.height * 0.3);
-
-        // Set up clipping for world view
-        this.ctx.save();
-        this.ctx.translate(-this.cameraX, 0);
-
-        // Draw platforms
-        for (const platform of this.platforms) {
-            this.drawPlatform(platform);
-        }
-
-        // Draw enemies
-        for (const enemy of this.enemies) {
-            if (!enemy.defeated) {
-                this.drawEnemy(enemy);
-            }
-        }
-
-        // Draw coins
-        for (const coin of this.coins) {
-            if (!coin.collected) {
-                this.drawCoin(coin);
-            }
-        }
-
-        // Draw goal
-        this.drawGoal();
-
-        // Draw player
-        this.drawStickman();
-
-        this.ctx.restore();
-
-        // Draw UI overlay
-        this.drawUI();
-
-        this.updateFPS(deltaTime);
+    updateCamera() {
+        this.cameraX = Math.max(0, Math.min(this.player.x - 200, this.worldWidth - this.canvas.width));
     }
 
-    drawPlatform(platform) {
-        this.ctx.fillStyle = '#8b4513';
+    updateAnimationState(deltaTime) {
+        this.animationState.elapsed += deltaTime;
+        if (this.animationState.elapsed >= this.animationState.frameInterval) {
+            this.animationState.elapsed = 0;
+            this.animationState.frameIndex = (this.animationState.frameIndex + 1) % 3;
+        }
+    }
 
-        if (platform.type === 'pole') {
-            this.ctx.fillStyle = '#654321';
-            this.ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
-            // Draw pole rings
-            for (let i = 0; i < platform.height; i += 15) {
-                this.ctx.strokeStyle = '#4a2511';
-                this.ctx.lineWidth = 2;
-                this.ctx.beginPath();
-                this.ctx.arc(platform.x + platform.width / 2, platform.y + i, platform.width / 2, 0, Math.PI * 2);
-                this.ctx.stroke();
-            }
-        } else if (platform.type === 'moving') {
-            this.ctx.fillStyle = '#ff8c00';
-            this.ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
-            this.ctx.strokeStyle = '#ff6600';
-            this.ctx.lineWidth = 2;
-            this.ctx.strokeRect(platform.x + 5, platform.y + 5, platform.width - 10, platform.height - 10);
+    updatePerformanceBuckets(deltaTime) {
+        if (deltaTime < 16) {
+            this.performance.frameBuckets.under16ms++;
+        } else if (deltaTime <= 33) {
+            this.performance.frameBuckets.between16And33ms++;
         } else {
-            this.ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
-            // Draw brick pattern
-            this.ctx.strokeStyle = '#654321';
-            this.ctx.lineWidth = 1;
-            for (let x = platform.x; x < platform.x + platform.width; x += 20) {
-                this.ctx.beginPath();
-                this.ctx.moveTo(x, platform.y);
-                this.ctx.lineTo(x, platform.y + platform.height);
-                this.ctx.stroke();
-            }
-        }
-    }
-
-    drawStickman() {
-        const px = this.player.x;
-        const py = this.player.y;
-        const scale = 1;
-
-        this.ctx.strokeStyle = '#000000';
-        this.ctx.fillStyle = '#000000';
-        this.ctx.lineWidth = 2;
-        this.ctx.lineCap = 'round';
-        this.ctx.lineJoin = 'round';
-
-        // Head
-        this.ctx.beginPath();
-        this.ctx.arc(px, py - 12 * scale, 5 * scale, 0, Math.PI * 2);
-        this.ctx.fill();
-
-        // Eyes
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.beginPath();
-        this.ctx.arc(px - 2 * scale, py - 13 * scale, 1.5 * scale, 0, Math.PI * 2);
-        this.ctx.fill();
-        this.ctx.beginPath();
-        this.ctx.arc(px + 2 * scale, py - 13 * scale, 1.5 * scale, 0, Math.PI * 2);
-        this.ctx.fill();
-
-        // Pupils
-        this.ctx.fillStyle = '#000000';
-        this.ctx.beginPath();
-        this.ctx.arc(px - 2 * scale + (this.player.direction * 0.5 * scale), py - 13 * scale, 0.8 * scale, 0, Math.PI * 2);
-        this.ctx.fill();
-        this.ctx.beginPath();
-        this.ctx.arc(px + 2 * scale + (this.player.direction * 0.5 * scale), py - 13 * scale, 0.8 * scale, 0, Math.PI * 2);
-        this.ctx.fill();
-
-        // Body
-        this.ctx.beginPath();
-        this.ctx.moveTo(px, py - 6 * scale);
-        this.ctx.lineTo(px, py + 3 * scale);
-        this.ctx.stroke();
-
-        // Arms
-        const armSwing = Math.sin(this.stepCount * 0.05) * 2;
-        this.ctx.beginPath();
-        this.ctx.moveTo(px, py - 2 * scale);
-        this.ctx.lineTo(px - 8 * scale * this.player.direction + armSwing, py + 1 * scale);
-        this.ctx.stroke();
-
-        this.ctx.beginPath();
-        this.ctx.moveTo(px, py - 2 * scale);
-        this.ctx.lineTo(px + 8 * scale * this.player.direction - armSwing, py + 1 * scale);
-        this.ctx.stroke();
-
-        // Legs
-        const legSwing = Math.sin(this.stepCount * 0.05) * 2;
-        this.ctx.beginPath();
-        this.ctx.moveTo(px, py + 3 * scale);
-        this.ctx.lineTo(px - 5 * scale + legSwing, py + 10 * scale);
-        this.ctx.stroke();
-
-        this.ctx.beginPath();
-        this.ctx.moveTo(px, py + 3 * scale);
-        this.ctx.lineTo(px + 5 * scale - legSwing, py + 10 * scale);
-        this.ctx.stroke();
-    }
-
-    drawEnemy(enemy) {
-        const px = enemy.x;
-        const py = enemy.y;
-
-        // Goomba style enemy
-        this.ctx.fillStyle = '#8b4513';
-        this.ctx.beginPath();
-        this.ctx.ellipse(px, py, enemy.width / 2, enemy.height / 2, 0, 0, Math.PI * 2);
-        this.ctx.fill();
-
-        // Eyes
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.beginPath();
-        this.ctx.arc(px - 5, py - 8, 2, 0, Math.PI * 2);
-        this.ctx.fill();
-        this.ctx.beginPath();
-        this.ctx.arc(px + 5, py - 8, 2, 0, Math.PI * 2);
-        this.ctx.fill();
-
-        // Pupils
-        this.ctx.fillStyle = '#000000';
-        this.ctx.beginPath();
-        this.ctx.arc(px - 5 + (Math.sign(enemy.velocityX) * 0.5), py - 8, 1, 0, Math.PI * 2);
-        this.ctx.fill();
-        this.ctx.beginPath();
-        this.ctx.arc(px + 5 + (Math.sign(enemy.velocityX) * 0.5), py - 8, 1, 0, Math.PI * 2);
-        this.ctx.fill();
-    }
-
-    drawCoin(coin) {
-        const px = coin.x;
-        const py = coin.y;
-        const radius = 6;
-
-        this.ctx.fillStyle = '#ffcc00';
-        this.ctx.beginPath();
-        this.ctx.arc(px, py, radius, 0, Math.PI * 2);
-        this.ctx.fill();
-
-        // Shine
-        this.ctx.fillStyle = '#ffff99';
-        this.ctx.beginPath();
-        this.ctx.arc(px - radius / 3, py - radius / 3, radius / 3, 0, Math.PI * 2);
-        this.ctx.fill();
-
-        // Spin effect
-        this.ctx.strokeStyle = '#ff9900';
-        this.ctx.lineWidth = 1;
-        const angle = this.stepCount * 0.1;
-        this.ctx.beginPath();
-        this.ctx.arc(px, py, radius - 2, angle, angle + Math.PI);
-        this.ctx.stroke();
-    }
-
-    drawGoal() {
-        const px = this.levelGoal.x;
-        const py = this.levelGoal.y;
-        const w = this.levelGoal.width;
-        const h = this.levelGoal.height;
-
-        // Pole
-        this.ctx.fillStyle = '#654321';
-        this.ctx.fillRect(px + w / 2 - 2, py + h - 10, 4, 10);
-
-        // Flag
-        this.ctx.fillStyle = '#ff0000';
-        this.ctx.beginPath();
-        this.ctx.moveTo(px + w / 2, py);
-        this.ctx.lineTo(px + w / 2 + w / 2, py + h / 4);
-        this.ctx.lineTo(px + w / 2, py + h / 2);
-        this.ctx.closePath();
-        this.ctx.fill();
-    }
-
-    drawUI() {
-        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-        this.ctx.fillRect(0, 0, this.canvas.width, 40);
-
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.font = 'bold 18px Arial';
-        this.ctx.fillText(`Level: ${this.currentLevel}`, 20, 25);
-        this.ctx.fillText(`Coins: ${this.coinsCollected}`, 150, 25);
-        this.ctx.fillText(`Position: ${Math.floor(this.player.x)}`, 300, 25);
-    }
-
-    updateFPS(deltaTime) {
-        this.frameCount++;
-        if (Date.now() - this.lastFrameTime > 1000) {
-            this.fps = this.frameCount;
-            document.getElementById('fpsValue').textContent = this.fps;
-            this.frameCount = 0;
-            this.lastFrameTime = Date.now();
+            this.performance.frameBuckets.over33ms++;
         }
     }
 
@@ -772,67 +1117,65 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
         this.player.y = this.groundLevel - 40;
         this.player.velocityX = 0;
         this.player.velocityY = 0;
+        this.player.climbing = false;
         this.addLogEntry('error', '❌ Fell off the level!');
+        this.initializeLevel();
     }
 
     /* ==================== UI STATE MANAGEMENT ==================== */
     updateStats() {
         document.getElementById('stepCounter').textContent = this.stepCount;
-        document.getElementById('positionDisplay').textContent = 
-            `${Math.floor(this.player.x)}, ${Math.floor(this.player.y)}`;
-        document.getElementById('distanceDisplay').textContent = 
-            `Level ${this.currentLevel}`;
-    }
+        document.getElementById('positionDisplay').textContent = `${Math.floor(this.player.x)}, ${Math.floor(this.player.y)}`;
+        document.getElementById('statusDisplay').textContent = this.statusState.toUpperCase();
 
-    addLogEntry(type, message) {
-        const logTerminal = document.getElementById('logTerminal');
-        const entry = document.createElement('div');
-        entry.className = `log-entry ${type}`;
-        entry.textContent = message;
-        logTerminal.appendChild(entry);
-        logTerminal.scrollTop = logTerminal.scrollHeight;
-
-        if (logTerminal.children.length > 50) {
-            logTerminal.removeChild(logTerminal.firstChild);
-        }
+        const distance = Math.abs(this.player.x - this.levelGoal.x);
+        document.getElementById('distanceDisplay').textContent = Math.floor(distance);
     }
 
     setStatus(status) {
         this.statusState = status;
         const indicator = document.getElementById('statusIndicator');
-        indicator.className = 'status-indicator';
-        if (status === 'error') {
-            indicator.classList.add('error');
-        } else if (status === 'idle') {
-            indicator.classList.add('idle');
+        indicator.className = `status-indicator ${status}`;
+        this.updateStats();
+    }
+
+    addLogEntry(type, message) {
+        const terminal = document.getElementById('logTerminal');
+        const entry = document.createElement('div');
+        entry.className = `log-entry ${type}`;
+        entry.textContent = message;
+
+        terminal.appendChild(entry);
+        terminal.scrollTop = terminal.scrollHeight;
+
+        while (terminal.children.length > 50) {
+            terminal.removeChild(terminal.firstChild);
         }
     }
 
-    /* ==================== LOCAL STORAGE ==================== */
+    loadUIState() {
+        document.getElementById('apiKey').value = this.apiKey;
+        document.getElementById('apiProvider').value = this.apiProvider;
+        this.updateStats();
+        this.setStatus('idle');
+    }
+
     saveAPIKey() {
-        const key = document.getElementById('apiKey').value;
-        localStorage.setItem('platformerAPIKey', key);
-        this.apiKey = key;
-        this.addLogEntry('system', '[SYSTEM] API key saved.');
+        this.apiKey = document.getElementById('apiKey').value.trim();
+        localStorage.setItem('aiSimAPIKey', this.apiKey);
     }
 
     loadAPIKey() {
-        return localStorage.getItem('platformerAPIKey') || '';
+        return localStorage.getItem('aiSimAPIKey') || '';
     }
 
     saveAPIProvider() {
-        const provider = document.getElementById('apiProvider').value;
-        localStorage.setItem('platformerProvider', provider);
-        this.apiProvider = provider;
+        this.apiProvider = document.getElementById('apiProvider').value;
+        localStorage.setItem('aiSimProvider', this.apiProvider);
     }
 
     loadAPIProvider() {
-        return localStorage.getItem('platformerProvider') || 'local';
-    }
-
-    loadUIState() {
-        document.getElementById('apiKey').value = this.loadAPIKey();
-        document.getElementById('apiProvider').value = this.loadAPIProvider();
+        return localStorage.getItem('aiSimProvider') || 'local';
     }
 
     /* ==================== EVENT LISTENERS ==================== */
@@ -841,8 +1184,11 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
         document.getElementById('apiProvider').addEventListener('change', () => this.saveAPIProvider());
 
         document.getElementById('targetTile').addEventListener('change', (e) => {
-            const name = e.target.value === 'level1' ? 'Level 1' : 'Level 2';
+            const level = e.target.value === 'terminal' ? 2 : 1;
+            this.currentLevel = level;
+            const name = level === 1 ? 'Level 1' : 'Level 2';
             document.getElementById('goalDisplay').textContent = `Goal: Complete ${name}`;
+            this.initializeLevel();
         });
 
         document.getElementById('runStepBtn').addEventListener('click', async () => {
@@ -859,7 +1205,7 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
         this.isAutoRunning = !this.isAutoRunning;
         const btn = document.getElementById('autoRunBtn');
         btn.style.opacity = this.isAutoRunning ? '1' : '0.6';
-        
+
         if (this.isAutoRunning) {
             this.addLogEntry('system', '[SYSTEM] Auto-run enabled.');
             this.autoRunLoop();
@@ -878,7 +1224,7 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
     }
 
     /* ==================== RENDER LOOP ==================== */
-    startRenderLoop() {
+    startGameLoop() {
         let lastTime = Date.now();
 
         const animate = () => {
@@ -886,16 +1232,39 @@ Respond in JSON: {"thought": "reasoning", "action": "action_name"}`;
             const deltaTime = now - lastTime;
             lastTime = now;
 
-            this.render(deltaTime);
+            this.update(deltaTime);
+            this.renderer.render();
+            this.updateFPS(deltaTime);
+
             requestAnimationFrame(animate);
         };
 
         requestAnimationFrame(animate);
+    }
+
+    updateFPS(deltaTime) {
+        this.frameCount++;
+        if (Date.now() - this.lastFrameTime > 1000) {
+            this.fps = this.frameCount;
+            document.getElementById('fpsValue').textContent = this.fps;
+            this.performance.drawCalls = this.renderer.metrics.drawCalls;
+
+            if (this.fps < this.performance.acceptanceTargets.minAcceptableFPS) {
+                this.addLogEntry('system', `[SYSTEM] Perf warning: FPS ${this.fps} below target ${this.performance.acceptanceTargets.minAcceptableFPS}`);
+            }
+
+            this.frameCount = 0;
+            this.lastFrameTime = Date.now();
+        }
+
+        if (deltaTime > 0 && this.performance.drawCalls > this.performance.acceptanceTargets.maxDrawCalls) {
+            this.addLogEntry('system', `[SYSTEM] Draw call warning: ${this.performance.drawCalls}`);
+        }
     }
 }
 
 /* ==================== INITIALIZATION ==================== */
 document.addEventListener('DOMContentLoaded', () => {
     window.game = new PlatformerGame();
-    console.log('🎮 2D Side-Scrolling Platformer initialized');
+    console.log('🎮 GPU tile platformer initialized');
 });
